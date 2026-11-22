@@ -101,7 +101,7 @@ fun DashboardScreen(vm: MainViewModel, nav: Nav, onOpenChart: (String, String) -
                     }
                 }
             } else {
-                LazyColumn(state = nav.dashList, modifier = Modifier.weight(1f)) {
+                LazyColumn(modifier = Modifier.weight(1f)) {
                     groups.forEach { (d, ws) ->
                         item(key = "h:${d.id}") {
                             Row(

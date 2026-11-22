@@ -49,6 +49,9 @@ interface HistoryDao {
     @Query("SELECT * FROM readings WHERE topic = :topic AND ts >= :from ORDER BY ts")
     suspend fun range(topic: String, from: Long): List<ReadingEntity>
 
+    @Query("SELECT * FROM readings WHERE topic = :topic AND ts >= :from ORDER BY ts DESC LIMIT :limit")
+    suspend fun rangeLast(topic: String, from: Long, limit: Int): List<ReadingEntity>
+
     @Query("DELETE FROM readings WHERE ts < :before")
     suspend fun prune(before: Long)
 

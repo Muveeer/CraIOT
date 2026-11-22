@@ -42,7 +42,6 @@ fun DevicesScreen(vm: MainViewModel, nav: Nav, onOpen: (String) -> Unit, onBack:
     val unknown by vm.unknown.collectAsStateWithLifecycle()
     val unknownList by vm.unknownList.collectAsStateWithLifecycle()
     val tel by vm.telemetry.collectAsStateWithLifecycle()
-    val now by vm.now.collectAsStateWithLifecycle()
     val aliases by vm.aliases.collectAsStateWithLifecycle()
     val state by vm.connState.collectAsStateWithLifecycle()
     var showUnknown by nav.devShowUnknown
@@ -93,7 +92,6 @@ fun DeviceScreen(vm: MainViewModel, id: String, onBack: () -> Unit) {
     val devices by vm.devices.collectAsStateWithLifecycle()
     val aliases by vm.aliases.collectAsStateWithLifecycle()
     val tel by vm.telemetry.collectAsStateWithLifecycle()
-    val now by vm.now.collectAsStateWithLifecycle()
     val compact by vm.compact.collectAsStateWithLifecycle()
     val pins by vm.pins.collectAsStateWithLifecycle()
     val unknownList by vm.unknownList.collectAsStateWithLifecycle()
@@ -123,12 +121,13 @@ fun DeviceScreen(vm: MainViewModel, id: String, onBack: () -> Unit) {
                 LazyColumn(modifier = Modifier.weight(1f)) {
                     groups.forEach { (page, ws) ->
                         item(key = "h:$page") { Text(page, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(top = 8.dp, bottom = 4.dp)) }
-                        items(ws, key = { it.id }) { w -> WidgetConsoleRow(w, vm, now, compact, w.topic in pins) { vm.togglePin(w.topic) } }
+                        items(ws, key = { it.id }) { w -> WidgetConsoleRow(w, vm, compact, w.topic in pins) { vm.togglePin(w.topic) } }
                     }
                 }
             } else {
                 LazyColumn(modifier = Modifier.weight(1f)) {
                     item {
+                        val now by vm.now.collectAsStateWithLifecycle()
                         OutlinedTextField(alias, { alias = it }, Modifier.fillMaxWidth(), singleLine = true, label = { Text("Имя устройства (алиас)") })
                         TextButton(onClick = { vm.setAlias(id, alias) }) { Text("Сохранить имя") }
                         KV("device id", d.id)

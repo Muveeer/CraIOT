@@ -37,6 +37,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.livecontrol.craiot.data.ReadingEntity
 import com.livecontrol.craiot.protocol.ChartPoint
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
@@ -48,7 +49,6 @@ import kotlin.math.log10
 import kotlin.math.pow
 
 val SeriesColors = listOf(Color(0xFF82AAFF), Color(0xFF9ECE6A), Color(0xFFFFCB6B), Color(0xFFF7768E))
-private val Caption = Color(0xFF97A3B4)
 private const val BAR_SLOTS = 48
 private data class Pt(val t: Long, val y: Double)
 private data class Series(val idx: Int, val name: String, val pts: List<Pt>)
@@ -112,7 +112,7 @@ private fun bucketStart(t: Long, bucket: String): Long {
 @Composable
 private fun ControlRow(caption: String, content: @Composable RowScope.() -> Unit) {
     Row(verticalAlignment = Alignment.CenterVertically) {
-        Text(caption, fontSize = 11.sp, color = Caption, modifier = Modifier.width(88.dp))
+        Text(caption, fontSize = 11.sp, color = LocalCraTokens.current.dim, modifier = Modifier.width(88.dp))
         Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp), content = content)
     }
 }
@@ -129,6 +129,7 @@ fun ChartScreen(vm: MainViewModel, topic: String, title: String, onBack: () -> U
     var sel by remember { mutableStateOf<Selection?>(null) }
     var initialized by remember { mutableStateOf(false) }
     val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
     val devices by vm.devices.collectAsStateWithLifecycle()
     val live = remember(devices, topic) {
         devices.values.flatMap { it.widgets.values }.firstOrNull { it.topic == topic }?.points ?: emptyList()
@@ -138,9 +139,9 @@ fun ChartScreen(vm: MainViewModel, topic: String, title: String, onBack: () -> U
 
     LaunchedEffect(topic, rangeMs) {
         while (true) {
-            rows = vm.readings(topic, if (rangeMs == 0L) 0L else System.currentTimeMillis() - rangeMs)
+            rows = vm.readingsLast(topic, if (rangeMs == 0L) 0L else System.currentTimeMillis() - rangeMs, 6000)
             total = vm.historyCount()
-            delay(5_000)
+            delay(15_000)
         }
     }
 
@@ -209,7 +210,10 @@ fun ChartScreen(vm: MainViewModel, topic: String, title: String, onBack: () -> U
         }
     }
     val tm = rememberTextMeasurer()
-    val axisStyle = TextStyle(fontSize = 10.sp, color = Caption, fontFamily = FontFamily.Monospace)
+    val cap = LocalCraTokens.current.dim
+    val chartBg = LocalCraTokens.current.tile
+    val gridC = LocalCraTokens.current.tileBorder
+    val axisStyle = TextStyle(fontSize = 10.sp, color = cap, fontFamily = FontFamily.Monospace)
     val xFmt = remember(bucket, rangeMs) {
         SimpleDateFormat(
             when {
@@ -229,12 +233,15 @@ fun ChartScreen(vm: MainViewModel, topic: String, title: String, onBack: () -> U
                     Text(topic, fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, fontFamily = FontFamily.Monospace)
                 }
                 TextButton(onClick = {
+                    scope.launch {
+                    val full = vm.readings(topic, 0L)
                     val sb = StringBuilder("ts;").append(series.joinToString(";") { it.name }).append('\n')
-                    rows.forEach { r ->
+                    full.forEach { r ->
                         sb.append(r.ts).append(';')
                             .append(listOf(r.v1, r.v2, r.v3, r.v4).joinToString(";") { it?.let { v -> fmtVal(v) } ?: "" }).append('\n')
                     }
                     ctx.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply { type = "text/plain"; putExtra(Intent.EXTRA_TEXT, sb.toString()) }, "CSV"))
+                    }
                 }) { Text("CSV") }
                 TextButton(onClick = onBack) { Text("Назад") }
             }
@@ -263,7 +270,7 @@ fun ChartScreen(vm: MainViewModel, topic: String, title: String, onBack: () -> U
                         Chip("Мин", agg == "min") { agg = "min" }
                         Chip("Последнее", agg == "last") { agg = "last" }
                     }
-                    Text("Точки объединяются за ${if (bucket == "hour") "час" else "день"}: $aggLabel", fontSize = 10.sp, color = Caption)
+                    Text("Точки объединяются за ${if (bucket == "hour") "час" else "день"}: $aggLabel", fontSize = 10.sp, color = cap)
                 }
                 ControlRow("Серии") {
                     series.forEach { sr ->
@@ -302,7 +309,7 @@ fun ChartScreen(vm: MainViewModel, topic: String, title: String, onBack: () -> U
                 else { val pad = (yMax - yMin) * 0.08; yMin -= pad; yMax += pad }
                 val step = niceStep(yMax - yMin)
 
-                Box(Modifier.weight(1f).clip(RoundedCornerShape(14.dp)).background(Color(0xFF0B0E12))) {
+                Box(Modifier.weight(1f).clip(RoundedCornerShape(14.dp)).background(chartBg)) {
                     Canvas(
                         Modifier.fillMaxSize().padding(start = 44.dp, end = 10.dp, top = 10.dp, bottom = 24.dp)
                             .pointerInput(bucketed, visible, t0, t1, drawMode) {
@@ -331,13 +338,13 @@ fun ChartScreen(vm: MainViewModel, topic: String, title: String, onBack: () -> U
                         var gv = ceil(yMin / step) * step
                         while (gv <= yMax + 1e-9) {
                             val y = Y(gv)
-                            drawLine(Color(0xFF232B36), Offset(0f, y), Offset(w, y), 1f)
+                            drawLine(gridC, Offset(0f, y), Offset(w, y), 1f)
                             val tl = tm.measure(fmtVal(gv), axisStyle)
                             drawText(tl, topLeft = Offset(-40.dp.toPx(), y - tl.size.height / 2f))
                             gv += step
                         }
                         sel?.let {
-                            drawLine(color = Caption, start = Offset(it.xFrac * w, 0f), end = Offset(it.xFrac * w, h),
+                            drawLine(color = cap, start = Offset(it.xFrac * w, 0f), end = Offset(it.xFrac * w, h),
                                 strokeWidth = 1f, pathEffect = PathEffect.dashPathEffect(floatArrayOf(6f, 6f)))
                         }
 

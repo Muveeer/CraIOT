@@ -42,9 +42,10 @@ fun ProfilesScreen(vm: MainViewModel, onPick: (String) -> Unit, onEdit: (String?
     val unknown by vm.unknown.collectAsStateWithLifecycle()
     val dark by vm.dark.collectAsStateWithLifecycle()
     val compact by vm.compact.collectAsStateWithLifecycle()
+    val glow by vm.tileGlow.collectAsStateWithLifecycle()
     val active = profiles.find { it.id == activeId }
     var hist by remember { mutableStateOf(0L) }
-    LaunchedEffect(Unit) { while (true) { hist = vm.historyCount(); delay(5000) } }
+    LaunchedEffect(Unit) { while (true) { hist = vm.historyCount(); delay(10_000) } }
     val scope = rememberCoroutineScope()
     val ctx = LocalContext.current
     var note by remember { mutableStateOf<String?>(null) }
@@ -62,7 +63,8 @@ fun ProfilesScreen(vm: MainViewModel, onPick: (String) -> Unit, onEdit: (String?
         }
     }
 
-    Scaffold(floatingActionButton = { FloatingActionButton(onClick = { onEdit(null) }) { Text("+", fontSize = 24.sp) } }) { pad ->
+    Scaffold(floatingActionButton = { FloatingActionButton(onClick = { onEdit(null) },
+        containerColor = MaterialTheme.colorScheme.primary, contentColor = MaterialTheme.colorScheme.onPrimary) { Text("+", fontSize = 24.sp) } }) { pad ->
         Column(Modifier.fillMaxSize().padding(pad).padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
@@ -76,7 +78,13 @@ fun ProfilesScreen(vm: MainViewModel, onPick: (String) -> Unit, onEdit: (String?
                 onDisconnect = vm::disconnect, onRetry = vm::retry)
             LazyColumn(Modifier.weight(1f)) {
                 item(key = "diag") {
-                    SectionHeader("Диагностика", "живые counters сессии и потока")
+                    SectionHeader("Диагностика", "сводка парка · живые counters сессии и потока")
+                    Row(Modifier.horizontalScroll(rememberScrollState()).padding(bottom = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        StatTile("устройства", "${devices.values.count { it.live || it.online == true }}/${devices.size}", "online", OnlineGreen, Modifier.width(104.dp))
+                        StatTile("виджеты", "${devices.values.sumOf { d -> d.widgets.values.count { !it.hidden } }}", "видимых", Signal, Modifier.width(96.dp))
+                        StatTile("поток", fmtRate(tel.rate), "msg/s", Cyan, Modifier.width(96.dp))
+                        StatTile("история", "$hist", "точек", Violet, Modifier.width(104.dp))
+                    }
                     KV("брокер", active?.let { "${it.host}:${it.port}" } ?: "—")
                     KV("транспорт", active?.let { "${it.protocol.name.lowercase()}${it.path}" } ?: "—")
                     KV("префикс", active?.prefix ?: "—")
@@ -93,10 +101,12 @@ fun ProfilesScreen(vm: MainViewModel, onPick: (String) -> Unit, onEdit: (String?
                     }
                 }
                 item(key = "settings") {
-                    SectionHeader("Оформление")
+                    SectionHeader("Оформление", "графит / бумага · раскладка плиток — чип «вид» на Обзоре")
                     Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         ConsoleChip(if (dark) "Тёмная" else "Светлая", dark) { vm.toggleDark() }
                         ConsoleChip("Compact", compact) { vm.toggleCompact() }
+                        ConsoleChip("Свечение", glow) { vm.toggleGlow() }
+                        ConsoleChip("Сброс вида", false) { vm.resetView() }
                     }
                 }
                 item(key = "profiles-head") {

@@ -117,7 +117,7 @@ fun ChartsListScreen(vm: MainViewModel, nav: Nav, onOpen: (String, String) -> Un
                                         }
                                         Column(horizontalAlignment = Alignment.End) {
                                             Text("${w.before ?: ""}${w.value ?: "—"}${w.after ?: ""}", fontFamily = FontFamily.Monospace,
-                                                fontSize = 14.sp, color = MaterialTheme.colorScheme.primary, textAlign = TextAlign.End,
+                                                fontSize = 14.sp, color = LocalCraTokens.current.ink, textAlign = TextAlign.End,
                                                 maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 130.dp))
                                             AgeText(w.valueAt, now)
                                         }

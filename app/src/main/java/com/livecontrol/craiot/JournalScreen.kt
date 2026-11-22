@@ -38,8 +38,9 @@ import java.util.Locale
 
 @Composable
 fun JournalScreen(vm: MainViewModel, nav: Nav) {
+    val t = LocalCraTokens.current
     val state by vm.connState.collectAsStateWithLifecycle()
-    val entries by vm.journal.items.collectAsStateWithLifecycle()
+    val entries by vm.journalFeed.collectAsStateWithLifecycle()
     val tel by vm.telemetry.collectAsStateWithLifecycle()
     val now by vm.now.collectAsStateWithLifecycle()
     var filter by nav.journalFilter
@@ -90,9 +91,14 @@ fun JournalScreen(vm: MainViewModel, nav: Nav) {
             }
             StatusBanner(state, null, onConnect = { vm.activeId.value?.let { vm.connect(it) } }, onDisconnect = vm::disconnect, onRetry = vm::retry)
             OutlinedTextField(filter, { filter = it }, Modifier.fillMaxWidth(), singleLine = true,
-                placeholder = { Text("Фильтр: топик или payload…") },
-                leadingIcon = { Icon(Icons.Default.Search, null) },
-                trailingIcon = { if (filter.isNotEmpty()) IconButton({ filter = "" }) { Icon(Icons.Default.Close, null) } })
+                shape = RoundedCornerShape(14.dp),
+                placeholder = { Text("Фильтр: топик или payload…", color = t.faint) },
+                leadingIcon = { Icon(Icons.Default.Search, null, tint = t.faint) },
+                trailingIcon = { if (filter.isNotEmpty()) IconButton({ filter = "" }) { Icon(Icons.Default.Close, null, tint = t.faint) } },
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = MaterialTheme.colorScheme.primary, unfocusedBorderColor = t.tileBorder,
+                    focusedContainerColor = t.tile, unfocusedContainerColor = t.tile, cursorColor = MaterialTheme.colorScheme.primary,
+                ))
             Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 ConsoleChip("все", type == "all", tel.total) { type = "all" }
                 listOf("status", "config", "event", "control", "state", "other").forEach { t ->
@@ -130,12 +136,13 @@ fun JournalScreen(vm: MainViewModel, nav: Nav) {
                 }
                 if (shown.isEmpty()) Text(if (filter.isBlank() && type == "all") "Ждём сообщения…" else "Ничего не найдено",
                     color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp, modifier = Modifier.align(Alignment.Center))
-                if (!follow) Box(Modifier.align(Alignment.TopCenter).padding(top = 6.dp).clip(CircleShape).background(Signal)
+                if (!follow) Box(Modifier.align(Alignment.TopCenter).padding(top = 6.dp).clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.primary)
                     .clickable { follow = true }.padding(horizontal = 14.dp, vertical = 7.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.KeyboardArrowUp, null, tint = Color(0xFF081018), modifier = Modifier.size(16.dp))
+                        Icon(Icons.Default.KeyboardArrowUp, null, tint = MaterialTheme.colorScheme.onPrimary, modifier = Modifier.size(16.dp))
                         Spacer(Modifier.width(4.dp))
-                        Text(if (newCount > 0) "$newCount новых" else "К ленте", color = Color(0xFF081018), fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                        Text(if (newCount > 0) "$newCount новых" else "К ленте", color = MaterialTheme.colorScheme.onPrimary, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
                     }
                 }
             }
