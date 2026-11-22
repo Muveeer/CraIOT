@@ -1,0 +1,10 @@
+services:
+  mosquitto:
+    image: eclipse-mosquitto:2
+    container_name: craiot-broker
+    ports: ["1883:1883", "9001:9001", "8083:8083"]
+    volumes:
+      - ./mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - ./certs:/mosquitto/certs:ro
+      - ./passwd:/mosquitto/config/passwd:ro
+    restart: unless-stopped
