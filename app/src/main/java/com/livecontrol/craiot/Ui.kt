@@ -197,6 +197,19 @@ fun LiveAge(at: Long?, vm: MainViewModel, modifier: Modifier = Modifier, color: 
     Text(at?.let { fmtAge(now - it) } ?: "—", modifier, color = color, fontSize = 10.sp, fontFamily = FontFamily.Monospace, maxLines = 1)
 }
 
+/** Возраст + точка свежести (≤2 с) одним дешёвым composable: без эффектов и анимаций на плитку. */
+@Composable
+fun FreshAge(at: Long?, vm: MainViewModel, modifier: Modifier = Modifier, stale: Boolean = false) {
+    val t = LocalCraTokens.current
+    val now by vm.now.collectAsStateWithLifecycle()
+    val fresh = at != null && (now - at) in 0..2000L
+    Row(modifier, verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.size(5.dp).clip(CircleShape).background(if (fresh) t.ok else t.faint))
+        Spacer(Modifier.width(5.dp))
+        Text(at?.let { fmtAge(now - it) } ?: "—", color = if (stale) t.warn else t.faint, fontSize = 10.sp, fontFamily = FontFamily.Monospace, maxLines = 1)
+    }
+}
+
 @Composable
 fun StatTile(label: String, value: String, sub: String? = null, accent: Color = MaterialTheme.colorScheme.primary, modifier: Modifier = Modifier) {
     val t = LocalCraTokens.current

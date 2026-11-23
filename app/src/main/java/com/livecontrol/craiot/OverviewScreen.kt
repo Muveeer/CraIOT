@@ -1,7 +1,6 @@
 package com.livecontrol.craiot
 
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
@@ -12,8 +11,6 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
@@ -47,9 +44,9 @@ import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
@@ -70,18 +67,13 @@ import java.util.Locale
 import kotlin.math.roundToInt
 
 /**
- * Обзор v2.1 — плитки + производительность.
+ * Обзор v3 — low-end first (Redmi Note 8 / SD665 / 393 dp).
  *
- * Бюджет recomposition:
- *  - devices приходит батчами ≤5 fps (sample в MainViewModel), telemetry/now на экране НЕ читаются;
- *  - секундный возраст — LiveAge внутри плитки (recompose одного Text);
- *  - свежесть — rememberFresh по (topic, valueAt): при скролле эффект перезапускается, но age-гейт
- *    не даёт вспышки старым значениям (фикс зелёного скролла сохранён);
- *  - TileEnv @Immutable без now → плитки со стабильными параметрами пропускаются Compose;
- *  - градиент плитки remembered; шапка сворачивается с гистерезисом (140/40 px), без дёрганий.
- *
- * Шапка: статистика переехала в «Связь → Диагностика»; при сворачивании остаётся slim-строка
- * (заголовок/страница + micro-сводка + действия), поиск 40 dp, чипы страниц скрываются.
+ * Бюджет на плитку ≈ бюджет строки: плоский фон (PS App), статическая рамка,
+ * НИ ОДНОГО LaunchedEffect / animate* / interactionSource на квадрат; свежесть и возраст —
+ * один FreshAge (тикает 1 раз/с локально). Колонки ограничены физической шириной:
+ * floor((W − зазоры)/72 dp) → на 393 dp максимум 4; micro-тип (<92 dp) уменьшает шрифты.
+ * Батчинг devices ≤5 fps, стабильные TileActions, contentType, remembered-сортировка — сохранены.
  */
 
 enum class TileClass { S, M, L, C, W }
@@ -141,32 +133,22 @@ private fun tileWhy(w: Widget, auto: TileClass, threshold: Int): String {
 @Immutable
 internal data class TileEnv(
     val cols: Int, val density: Float, val textMode: String, val threshold: Int,
-    val showAge: Boolean, val showSpark: Boolean, val glow: Boolean,
+    val showAge: Boolean, val showSpark: Boolean, val glow: Boolean, val micro: Boolean,
 )
 
-private const val FRESH_MS = 2000L
-
-/** Свежесть от данных, не от слота: перезапуск при скролле гасится age-гейтом. */
-@Composable
-private fun rememberFresh(topic: String, valueAt: Long?): Boolean {
-    var fresh by remember(topic) { mutableStateOf(false) }
-    LaunchedEffect(topic, valueAt) {
-        if (valueAt == null) { fresh = false; return@LaunchedEffect }
-        val age = System.currentTimeMillis() - valueAt
-        if (age in 0..FRESH_MS) { fresh = true; delay(FRESH_MS - age); fresh = false } else fresh = false
-    }
-    return fresh
-}
+/** Стабильные колбэки: один экземпляр на экран → плитки с неизменным w полностью пропускаются. */
+@Immutable
+internal class TileActions(
+    val pin: (Widget) -> Unit,
+    val expand: (Widget) -> Unit,
+    val inspect: (Widget) -> Unit,
+    val chart: (Widget) -> Unit,
+)
 
 @Composable
-private fun TileFooter(w: Widget, vm: MainViewModel, env: TileEnv, fresh: Boolean, stale: Boolean, modifier: Modifier = Modifier, trailing: @Composable RowScope.() -> Unit = {}) {
-    val t = LocalCraTokens.current
+private fun TileFooter(w: Widget, vm: MainViewModel, env: TileEnv, stale: Boolean, modifier: Modifier = Modifier, trailing: @Composable RowScope.() -> Unit = {}) {
     Row(modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        if (env.showAge) {
-            Box(Modifier.size(5.dp).clip(CircleShape).background(if (fresh) t.ok else t.faint))
-            Spacer(Modifier.width(5.dp))
-            LiveAge(w.valueAt, vm, color = if (stale) t.warn else t.faint)
-        }
+        if (env.showAge) FreshAge(w.valueAt, vm, stale = stale)
         Spacer(Modifier.weight(1f))
         trailing()
     }
@@ -221,7 +203,6 @@ private fun MiniChart(points: List<ChartPoint>, modifier: Modifier = Modifier) {
     }
 }
 
-/** Компактный поиск 40 dp вместо 56-dp поля. */
 @Composable
 private fun CompactSearch(query: String, onChange: (String) -> Unit, modifier: Modifier = Modifier) {
     val t = LocalCraTokens.current
@@ -252,40 +233,30 @@ private fun CompactSearch(query: String, onChange: (String) -> Unit, modifier: M
 
 @Composable
 internal fun WidgetTile(
-    d: Device, w: Widget, vm: MainViewModel, env: TileEnv, cls: TileClass,
-    pinned: Boolean, expanded: Boolean, modifier: Modifier = Modifier,
-    onPin: () -> Unit, onExpand: () -> Unit, onInspect: () -> Unit, onOpenChart: () -> Unit,
+    w: Widget, vm: MainViewModel, env: TileEnv, cls: TileClass, stale: Boolean,
+    pinned: Boolean, expanded: Boolean, actions: TileActions, modifier: Modifier = Modifier,
 ) {
     val t = LocalCraTokens.current
     val accent = MaterialTheme.colorScheme.primary
     val dd = env.density
-    val stale = !d.live && d.online != true
-    val fresh = rememberFresh(w.topic, w.valueAt)
-    val interaction = remember { MutableInteractionSource() }
-    val pressed by interaction.collectIsPressedAsState()
-    val borderColor by animateColorAsState(
-        when { fresh -> t.ok.copy(alpha = .65f); pressed && env.glow -> accent.copy(alpha = .55f); else -> t.tileBorder },
-        tween(240), label = "tileBorder",
-    )
-    val scale by animateFloatAsState(if (pressed) .985f else 1f, tween(160), label = "tileScale")
-    val shape = RoundedCornerShape(t.radius)
-    val bg = remember(t.tileHigh, t.tile) { Brush.verticalGradient(listOf(t.tileHigh, t.tile)) }
-    val tap = if (w.kind == WidgetKind.CHART) onOpenChart else onInspect
+    val micro = env.micro && cls == TileClass.S
+    val shape = RoundedCornerShape(if (micro) 12.dp else t.radius)
+    val pad = if (micro) 8.dp else (10 * dd).dp
+    val tap: () -> Unit = if (w.kind == WidgetKind.CHART) { { actions.chart(w) } } else { { actions.inspect(w) } }
 
     Box(
-        modifier.graphicsLayer { scaleX = scale; scaleY = scale }
-            .clip(shape).background(bg).border(1.dp, borderColor, shape)
-            .clickable(interactionSource = interaction, indication = null, onClick = tap),
+        modifier.clip(shape).background(t.tile).border(1.dp, t.tileBorder, shape)
+            .clickable(interactionSource = null, indication = null, onClick = tap),
     ) {
-        Column(Modifier.fillMaxSize().padding((10 * dd).dp).alpha(if (stale) .6f else 1f)) {
+        Column(Modifier.fillMaxSize().padding(pad).alpha(if (stale) .6f else 1f)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(w.descr.ifBlank { w.id }, fontSize = 11.sp * dd, color = t.dim, maxLines = 1,
+                Text(w.descr.ifBlank { w.id }, fontSize = if (micro) 9.5.sp else 11.sp * dd, color = t.dim, maxLines = 1,
                     overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
                 Icon(Icons.Default.Star, contentDescription = if (pinned) "Открепить" else "Закрепить",
                     tint = if (pinned) MaterialTheme.colorScheme.tertiary else t.faint.copy(alpha = .7f),
-                    modifier = Modifier.size(17.dp).clickable(onClick = onPin))
+                    modifier = Modifier.size(if (micro) 14.dp else 17.dp).clickable { actions.pin(w) })
             }
-            Spacer(Modifier.height((4 * dd).dp))
+            Spacer(Modifier.height(((if (micro) 2 else 4) * dd).dp))
 
             when {
                 cls == TileClass.C && (w.kind == WidgetKind.TOGGLE || (w.kind == WidgetKind.BTN_SWITCH && w.mode != "momentary")) -> {
@@ -396,11 +367,11 @@ internal fun WidgetTile(
                         maxLines = maxLines, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
                     if (cls == TileClass.W || expanded) {
                         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                            if (env.showAge) LiveAge(w.valueAt, vm)
+                            if (env.showAge) FreshAge(w.valueAt, vm, stale = stale)
                             Spacer(Modifier.weight(1f))
                             Text(if (expanded) "свернуть ↑" else "ещё ↓", fontSize = 11.sp * dd, color = accent, fontWeight = FontWeight.SemiBold,
                                 modifier = Modifier.clip(CircleShape).background(accent.copy(alpha = .12f))
-                                    .clickable(onClick = onExpand).padding(horizontal = 9.dp, vertical = 3.dp))
+                                    .clickable { actions.expand(w) }.padding(horizontal = 9.dp, vertical = 3.dp))
                         }
                     }
                 }
@@ -409,23 +380,23 @@ internal fun WidgetTile(
                     val numeric = w.value?.toDoubleOrNull() != null
                     Row(verticalAlignment = Alignment.Bottom) {
                         Text(w.value ?: "—",
-                            style = if (numeric) craNumStyle((if (cls == TileClass.S) 27 else 21).sp * dd, t.ink)
-                            else craNumStyle(15.sp * dd, t.ink, FontWeight.Medium).copy(fontFamily = FontFamily.Monospace),
+                            style = if (numeric) craNumStyle((if (micro) 17 else if (cls == TileClass.S) 27 else 21).sp * dd, t.ink)
+                            else craNumStyle((if (micro) 12 else 15).sp * dd, t.ink, FontWeight.Medium).copy(fontFamily = FontFamily.Monospace),
                             maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
                         val unit = listOfNotNull(w.before, w.after).joinToString(" ")
-                        if (unit.isNotBlank()) {
+                        if (unit.isNotBlank() && !micro) {
                             Spacer(Modifier.width(4.dp))
                             Text(unit, fontSize = 11.sp * dd, color = t.dim, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
                     }
-                    w.info?.let { Text(it, fontSize = 10.sp * dd, color = iotColor(w.infoColor) ?: t.faint, maxLines = 1, overflow = TextOverflow.Ellipsis) }
-                    Spacer(Modifier.height((4 * dd).dp))
+                    if (!micro) w.info?.let { Text(it, fontSize = 10.sp * dd, color = iotColor(w.infoColor) ?: t.faint, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                    Spacer(Modifier.height(((if (micro) 2 else 4) * dd).dp))
                 }
             }
 
             if (cls != TileClass.W && !expanded) {
-                Spacer(Modifier.height((4 * dd).dp))
-                TileFooter(w, vm, env, fresh, stale) {
+                Spacer(Modifier.height(((if (micro) 2 else 4) * dd).dp))
+                TileFooter(w, vm, env, stale) {
                     if (w.pending && cls != TileClass.C) CircularProgressIndicator(Modifier.size(11.dp), strokeWidth = 1.5.dp, color = accent)
                 }
             }
@@ -489,7 +460,6 @@ fun OverviewScreen(vm: MainViewModel, nav: Nav, onOpenChart: (String, String) ->
     var searchOpen by rememberSaveable { mutableStateOf(false) }
     var headerCollapsed by rememberSaveable { mutableStateOf(false) }
 
-    // Гистерезис шапки: свернули при уходе вниз, развернули только у самого верха.
     LaunchedEffect(nav.dashList) {
         snapshotFlow { nav.dashList.firstVisibleItemIndex to nav.dashList.firstVisibleItemScrollOffset }
             .collect { (i, off) ->
@@ -519,6 +489,14 @@ fun OverviewScreen(vm: MainViewModel, nav: Nav, onOpenChart: (String, String) ->
                 .filter { page.isEmpty() || it.page.ifBlank { "Без страницы" } == page }
             if (ws.isEmpty()) null else d to ws
         }
+    }
+    val actions = remember(vm, onOpenChart) {
+        TileActions(
+            pin = { w -> vm.togglePin(w.topic) },
+            expand = { w -> expandedTopics = if (w.topic in expandedTopics) expandedTopics - w.topic else expandedTopics + w.topic },
+            inspect = { w -> inspectTopic = w.topic },
+            chart = { w -> onOpenChart(w.topic, w.descr.ifBlank { w.id }) },
+        )
     }
     val online = devices.values.count { it.live || it.online == true }
     val allCollapsed = groups.isNotEmpty() && groups.all { collapsed.contains(it.first.id) }
@@ -558,26 +536,31 @@ fun OverviewScreen(vm: MainViewModel, nav: Nav, onOpenChart: (String, String) ->
             }
 
             BoxWithConstraints(Modifier.weight(1f)) {
-                val autoCols = (maxWidth / 158.dp).toInt().coerceIn(2, 6)
-                val cols = if (columnsPref == 0) autoCols else columnsPref.coerceIn(2, 6)
-                val env = TileEnv(cols, density, textMode, threshold, showAge, showSpark, glow)
-                val tileH = 118.dp * density
+                // Физический кап: квадрат не уже 72 dp. Redmi 393 dp → максимум 4; 6 — планшет/landscape.
+                val maxCols = ((maxWidth - t.gap * 5) / 72.dp).toInt().coerceIn(2, 6)
+                val autoCols = (maxWidth / 158.dp).toInt().coerceIn(2, maxCols)
+                val cols = (if (columnsPref == 0) autoCols else columnsPref).coerceIn(2, maxCols)
+                val tileW = (maxWidth - t.gap * (cols - 1)) / cols
+                val micro = tileW < 92.dp
+                val env = TileEnv(cols, density, textMode, threshold, showAge, showSpark, glow, micro)
+                val tileH = (if (micro) 96.dp else 118.dp) * density
                 val tallH = tileH * 2 + t.gap
                 fun clsOf(w: Widget) = classifyTile(w, threshold, overrides[w.topic])
                 fun spanOf(w: Widget) = tileSpan(clsOf(w), cols, textMode, w.topic in expandedTopics)
-                fun orderOf(ws: List<Widget>) = ws.sortedWith(
-                    compareBy<Widget> { tileRank(clsOf(it), cols, textMode, it.topic in expandedTopics) }.then(tileWidgetOrder),
-                )
+                val orderedGroups = remember(groups, cols, textMode, threshold, overrides, expandedTopics) {
+                    groups.map { (d, ws) ->
+                        d to ws.sortedWith(compareBy<Widget> { tileRank(clsOf(it), cols, textMode, it.topic in expandedTopics) }.then(tileWidgetOrder))
+                    }
+                }
+                val orderedPinned = remember(pinnedWidgets, cols, textMode, threshold, overrides, expandedTopics) {
+                    pinnedWidgets.sortedWith(compareBy { tileRank(clsOf(it.second), cols, textMode, it.second.topic in expandedTopics) })
+                }
                 val tile: @Composable (Device, Widget) -> Unit = { d, w ->
                     val cls = clsOf(w)
                     val exp = w.topic in expandedTopics
                     val tall = tileTall(cls, textMode, exp)
-                    WidgetTile(d, w, vm, env, cls, w.topic in pins, exp,
-                        modifier = Modifier.height(if (tall) tallH else tileH),
-                        onPin = { vm.togglePin(w.topic) },
-                        onExpand = { expandedTopics = if (exp) expandedTopics - w.topic else expandedTopics + w.topic },
-                        onInspect = { inspectTopic = w.topic },
-                        onOpenChart = { onOpenChart(w.topic, w.descr.ifBlank { w.id }) })
+                    WidgetTile(w, vm, env, cls, !d.live && d.online != true, w.topic in pins, exp, actions,
+                        modifier = Modifier.height(if (tall) tallH else tileH))
                 }
 
                 LazyVerticalGrid(
@@ -602,7 +585,8 @@ fun OverviewScreen(vm: MainViewModel, nav: Nav, onOpenChart: (String, String) ->
                                     TextButton(onClick = { query = "" }) { Text("Сбросить поиск") }
                                 }
                             }
-                            items(searchResults, key = { "s:${it.first.id}/${it.second.id}" }, span = { GridItemSpan(spanOf(it.second)) }) { (d, w) -> tile(d, w) }
+                            items(searchResults, key = { "s:${it.first.id}/${it.second.id}" }, span = { GridItemSpan(spanOf(it.second)) },
+                                contentType = { clsOf(it.second) }) { (d, w) -> tile(d, w) }
                         }
                         else -> {
                             if (noConfigs) item(key = "noconf", span = { GridItemSpan(cols) }) {
@@ -619,17 +603,19 @@ fun OverviewScreen(vm: MainViewModel, nav: Nav, onOpenChart: (String, String) ->
                                         Text("${pinnedWidgets.size}", fontSize = 10.sp, fontFamily = FontFamily.Monospace, color = t.faint)
                                     }
                                 }
-                                items(pinnedWidgets.sortedWith(compareBy { tileRank(clsOf(it.second), cols, textMode, it.second.topic in expandedTopics) }),
-                                    key = { "p:${it.first.id}/${it.second.id}" }, span = { GridItemSpan(spanOf(it.second)) }) { (d, w) -> tile(d, w) }
+                                items(orderedPinned,
+                                    key = { "p:${it.first.id}/${it.second.id}" }, span = { GridItemSpan(spanOf(it.second)) },
+                                    contentType = { clsOf(it.second) }) { (d, w) -> tile(d, w) }
                             }
-                            groups.forEach { (d, ws) ->
-                                item(key = "h:${d.id}", span = { GridItemSpan(cols) }) {
+                            orderedGroups.forEach { (d, ws) ->
+                                item(key = "h:${d.id}", span = { GridItemSpan(cols) }, contentType = "header") {
                                     DeviceTileHeader(d, aliases[d.id], vm, ws.size, collapsed.contains(d.id),
                                         { collapsed = if (collapsed.contains(d.id)) collapsed - d.id else collapsed + d.id },
                                         { onOpenDevice(d.id) })
                                 }
                                 if (!collapsed.contains(d.id)) {
-                                    items(orderOf(ws), key = { "${d.id}/${it.id}" }, span = { GridItemSpan(spanOf(it)) }) { w -> tile(d, w) }
+                                    items(ws, key = { "${d.id}/${it.id}" }, span = { GridItemSpan(spanOf(it)) },
+                                        contentType = { clsOf(it) }) { w -> tile(d, w) }
                                 }
                             }
                         }
@@ -676,7 +662,6 @@ private fun InspectorSheet(
     val auto = classifyTile(w, threshold, null)
     val cls = classifyTile(w, threshold, override)
     val why = (override?.let { "Оверрайд $it · автоправило: $auto. " } ?: "") + tileWhy(w, auto, threshold)
-    val fresh = rememberFresh(w.topic, w.valueAt)
     var rows by remember { mutableStateOf<List<ReadingEntity>>(emptyList()) }
     LaunchedEffect(w.topic) {
         while (true) {
@@ -700,9 +685,7 @@ private fun InspectorSheet(
             Text(w.value ?: "—", style = craNumStyle(34.sp, t.ink), modifier = Modifier.weight(1f, fill = false))
             w.after?.let { Spacer(Modifier.width(5.dp)); Text(it, fontSize = 14.sp, color = t.dim) }
             Spacer(Modifier.weight(1f))
-            Box(Modifier.size(6.dp).clip(CircleShape).background(if (fresh) t.ok else t.faint))
-            Spacer(Modifier.width(5.dp))
-            LiveAge(w.valueAt, vm)
+            FreshAge(w.valueAt, vm)
         }
         Box(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(accent.copy(alpha = .09f))
             .border(1.dp, accent.copy(alpha = .3f), RoundedCornerShape(12.dp)).padding(11.dp)) {
@@ -761,11 +744,13 @@ private fun InspectorSheet(
 @Composable
 private fun ViewSheet(vm: MainViewModel, cols: Int, density: Float, textMode: String, threshold: Int, glow: Boolean, showAge: Boolean, showSpark: Boolean) {
     val t = LocalCraTokens.current
+    val cfg = LocalConfiguration.current
+    val maxCols = ((cfg.screenWidthDp - 24 - 50) / 72).coerceIn(2, 6)
     var dens by remember(density) { mutableStateOf(density) }
     var thr by remember(threshold) { mutableStateOf(threshold.toFloat()) }
     Column(Modifier.verticalScroll(rememberScrollState()).padding(horizontal = 16.dp).padding(bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text("Вид · раскладка плиток", style = MaterialTheme.typography.titleMedium)
-        Text("КОЛОНКИ", fontSize = 10.sp, color = t.faint, fontWeight = FontWeight.SemiBold, letterSpacing = 1.sp)
+        Text("КОЛОНКИ · на этом экране максимум $maxCols (квадрат ≥ 72 dp)", fontSize = 10.sp, color = t.faint, fontWeight = FontWeight.SemiBold, letterSpacing = 1.sp)
         Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             ConsoleChip("Авто", cols == 0) { vm.setColumns(0) }
             (2..6).forEach { n -> ConsoleChip("$n", cols == n) { vm.setColumns(n) } }
@@ -790,10 +775,6 @@ private fun ViewSheet(vm: MainViewModel, cols: Int, density: Float, textMode: St
         }
         Text("Длину не угадываем — измеряем: payload длиннее порога получает плитку W с раскрытием.", fontSize = 11.sp, color = t.faint, lineHeight = 15.sp)
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Text("Свечение фокуса · PS5", fontSize = 12.sp, color = t.dim, modifier = Modifier.weight(1f))
-            Switch(glow, { vm.toggleGlow() })
-        }
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Text("Возраст значения", fontSize = 12.sp, color = t.dim, modifier = Modifier.weight(1f))
             Switch(showAge, { vm.toggleAge() })
         }
@@ -805,14 +786,13 @@ private fun ViewSheet(vm: MainViewModel, cols: Int, density: Float, textMode: St
     }
 }
 
-/** Совместимая строка для DeviceScreen: возраст — LiveAge, свежесть — keyed-эффект. */
+/** Совместимая строка для DeviceScreen: возраст+свежесть одним FreshAge. */
 @Composable
 fun WidgetConsoleRow(w: Widget, vm: MainViewModel, compact: Boolean, pinned: Boolean, onPin: () -> Unit) {
     val t = LocalCraTokens.current
     val accent = MaterialTheme.colorScheme.primary
     val clipboard = LocalClipboardManager.current
     var open by remember(w.topic) { mutableStateOf(false) }
-    val fresh = rememberFresh(w.topic, w.valueAt)
     val isControl = w.kind == WidgetKind.TOGGLE || w.kind == WidgetKind.BTN_SWITCH ||
         w.kind == WidgetKind.SIMPLE_BTN || w.kind == WidgetKind.BTN || w.kind == WidgetKind.POWER_BUTTON
     val pad = if (compact) 6.dp else 9.dp
@@ -837,16 +817,12 @@ fun WidgetConsoleRow(w: Widget, vm: MainViewModel, compact: Boolean, pinned: Boo
                 isControl ->
                     Button(onClick = { vm.send(w, w.data ?: "1") }, colors = ButtonDefaults.buttonColors(containerColor = iotColor(w.fill ?: w.color) ?: accent),
                         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 5.dp)) { Text(w.title ?: w.descr.ifBlank { w.id }, fontSize = 12.sp) }
-                else -> {
-                    Box(Modifier.size(5.dp).clip(CircleShape).background(if (fresh) t.ok else Color.Transparent))
-                    Spacer(Modifier.width(5.dp))
-                    Text("${w.before ?: ""}${w.value ?: "—"}${w.after ?: ""}", fontFamily = FontFamily.Monospace,
-                        fontSize = if (compact) 14.sp else 15.sp, color = t.ink, maxLines = 1,
-                        overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 150.dp))
-                }
+                else -> Text("${w.before ?: ""}${w.value ?: "—"}${w.after ?: ""}", fontFamily = FontFamily.Monospace,
+                    fontSize = if (compact) 14.sp else 15.sp, color = t.ink, maxLines = 1,
+                    overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 150.dp))
             }
             Spacer(Modifier.width(6.dp))
-            LiveAge(w.valueAt, vm)
+            FreshAge(w.valueAt, vm)
             TextButton(onClick = onPin, contentPadding = PaddingValues(4.dp)) {
                 Text(if (pinned) "★" else "☆", color = if (pinned) MaterialTheme.colorScheme.tertiary else t.faint, fontSize = 14.sp)
             }

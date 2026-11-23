@@ -9,7 +9,9 @@ import com.livecontrol.craiot.data.BrokerProfile
 import com.livecontrol.craiot.data.ReadingEntity
 import com.livecontrol.craiot.mqtt.Transport
 import com.livecontrol.craiot.protocol.Widget
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.sample
 import kotlinx.coroutines.flow.stateIn
@@ -29,11 +31,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     val activeId = c.repo.activeId.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
     val connState = c.manager.state
     val journal = c.journal
-    val journalFeed = c.journal.items.sample(250).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), c.journal.items.value)
-    val devices = c.registry.devices.sample(200).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), c.registry.devices.value)
+    val journalFeed = c.journal.items.sample(250).flowOn(Dispatchers.Default).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), c.journal.items.value)
+    val devices = c.registry.devices.sample(200).flowOn(Dispatchers.Default).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), c.registry.devices.value)
     val unknown = c.registry.unknown
     val unknownList = c.registry.unknownList
-    val telemetry = c.telemetry.snap.sample(500).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), c.telemetry.snap.value)
+    val telemetry = c.telemetry.snap.sample(500).flowOn(Dispatchers.Default).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), c.telemetry.snap.value)
     val now = c.now
     val dark = c.ui.dark.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), true)
     val compact = c.ui.compact.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)

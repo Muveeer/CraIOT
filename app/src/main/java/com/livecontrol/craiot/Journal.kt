@@ -45,5 +45,5 @@ class Journal(scope: CoroutineScope, incoming: SharedFlow<RawMessage>) {
     fun setPaused(p: Boolean) { paused = p; if (!p) dirty = true }
     fun clear() { synchronized(buf) { buf.clear() }; _items.value = emptyList() }
 
-    private companion object { const val CAP = 5000 }
+    private companion object { const val CAP = 2000 }
 }

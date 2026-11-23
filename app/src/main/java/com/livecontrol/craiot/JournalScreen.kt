@@ -7,10 +7,10 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.KeyboardArrowUp
@@ -22,9 +22,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -36,13 +38,17 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
+/**
+ * Поток v3: каждый Text с явным цветом из токенов (ничего не сливается с фоном на MIUI),
+ * строка ленты дешёвая (~6 composable, contentType для переиспользования слотов),
+ * счётчики отдельной строкой — не схлопываются weight'ами на 393 dp.
+ */
 @Composable
 fun JournalScreen(vm: MainViewModel, nav: Nav) {
     val t = LocalCraTokens.current
     val state by vm.connState.collectAsStateWithLifecycle()
     val entries by vm.journalFeed.collectAsStateWithLifecycle()
     val tel by vm.telemetry.collectAsStateWithLifecycle()
-    val now by vm.now.collectAsStateWithLifecycle()
     var filter by nav.journalFilter
     var paused by nav.journalPaused
     var follow by nav.journalFollow
@@ -84,58 +90,70 @@ fun JournalScreen(vm: MainViewModel, nav: Nav) {
     Surface(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("Поток", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
-                Text("${fmtRate(tel.rate)} msg/s", fontSize = 12.sp, fontFamily = FontFamily.Monospace, color = Signal)
+                Text("Поток", style = MaterialTheme.typography.titleMedium, color = t.ink, modifier = Modifier.weight(1f))
+                Text("${fmtRate(tel.rate)} msg/s", fontSize = 12.sp, fontFamily = FontFamily.Monospace, color = Cyan)
                 Spacer(Modifier.width(8.dp))
                 RateSpark(tel.spark, Modifier.width(90.dp).height(16.dp))
             }
             StatusBanner(state, null, onConnect = { vm.activeId.value?.let { vm.connect(it) } }, onDisconnect = vm::disconnect, onRetry = vm::retry)
-            OutlinedTextField(filter, { filter = it }, Modifier.fillMaxWidth(), singleLine = true,
-                shape = RoundedCornerShape(14.dp),
-                placeholder = { Text("Фильтр: топик или payload…", color = t.faint) },
-                leadingIcon = { Icon(Icons.Default.Search, null, tint = t.faint) },
-                trailingIcon = { if (filter.isNotEmpty()) IconButton({ filter = "" }) { Icon(Icons.Default.Close, null, tint = t.faint) } },
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = MaterialTheme.colorScheme.primary, unfocusedBorderColor = t.tileBorder,
-                    focusedContainerColor = t.tile, unfocusedContainerColor = t.tile, cursorColor = MaterialTheme.colorScheme.primary,
-                ))
-            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                ConsoleChip("все", type == "all", tel.total) { type = "all" }
-                listOf("status", "config", "event", "control", "state", "other").forEach { t ->
-                    ConsoleChip(t, type == t, tel.byType[t]) { type = t }
+            Row(
+                Modifier.fillMaxWidth().height(40.dp).clip(RoundedCornerShape(12.dp))
+                    .background(t.tile).padding(horizontal = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(Icons.Default.Search, null, tint = t.faint, modifier = Modifier.size(15.dp))
+                Spacer(Modifier.width(8.dp))
+                Box(Modifier.weight(1f)) {
+                    if (filter.isEmpty()) Text("Фильтр: топик или payload…", fontSize = 12.5.sp, color = t.faint, maxLines = 1)
+                    BasicTextField(filter, { filter = it }, singleLine = true,
+                        textStyle = TextStyle(fontSize = 13.sp, color = t.ink),
+                        cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                        modifier = Modifier.fillMaxWidth())
+                }
+                if (filter.isNotEmpty()) {
+                    Spacer(Modifier.width(6.dp))
+                    Icon(Icons.Default.Close, null, tint = t.faint,
+                        modifier = Modifier.size(16.dp).clip(CircleShape).clickable { filter = "" })
                 }
             }
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text("${shown.size} / ${entries.size}", fontSize = 11.sp, fontFamily = FontFamily.Monospace, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
-                if (paused) Text("ПАУЗА", color = Amber, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                ConsoleChip("авто", follow) { follow = !follow }
-                TextButton(onClick = { paused = !paused }) { Text(if (paused) "Пуск" else "Пауза") }
-                TextButton(onClick = { export() }) { Text("Экспорт") }
-                TextButton(onClick = { vm.journal.clear() }) { Text("Очистить") }
+            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                ConsoleChip("все", type == "all", tel.total) { type = "all" }
+                listOf("status", "config", "event", "control", "state", "other").forEach { tp ->
+                    ConsoleChip(tp, type == tp, tel.byType[tp]) { type = tp }
+                }
             }
-            Box(Modifier.weight(1f).clip(RoundedCornerShape(14.dp)).background(MaterialTheme.colorScheme.surfaceVariant)) {
-                LazyColumn(state = listState, modifier = Modifier.fillMaxSize().padding(8.dp)) {
-                    items(shown, key = { it.seq }) { e ->
+            Text("${shown.size} / ${entries.size}" + (if (paused) " · ПАУЗА" else ""), fontSize = 11.sp,
+                fontFamily = FontFamily.Monospace, color = if (paused) Amber else t.faint, maxLines = 1)
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                ConsoleChip("авто", follow) { follow = !follow }
+                Spacer(Modifier.weight(1f))
+                TextButton(onClick = { paused = !paused }, contentPadding = PaddingValues(6.dp)) { Text(if (paused) "Пуск" else "Пауза", fontSize = 12.sp) }
+                TextButton(onClick = { export() }, contentPadding = PaddingValues(6.dp)) { Text("Экспорт", fontSize = 12.sp) }
+                TextButton(onClick = { vm.journal.clear() }, contentPadding = PaddingValues(6.dp)) { Text("Очистить", fontSize = 12.sp) }
+            }
+            Box(Modifier.weight(1f).clip(RoundedCornerShape(14.dp)).background(t.tile)) {
+                LazyColumn(state = listState, modifier = Modifier.fillMaxSize().padding(horizontal = 8.dp, vertical = 4.dp)) {
+                    items(shown, key = { it.seq }, contentType = { "row" }) { e ->
                         var open by remember(e.seq) { mutableStateOf(false) }
-                        val t = Telemetry.typeOf(e.msg.topic)
+                        val tp = Telemetry.typeOf(e.msg.topic)
                         Column(Modifier.fillMaxWidth().clickable { clipboard.setText(AnnotatedString("${e.msg.topic}\n${e.msg.payload}")) }.padding(vertical = 4.dp)) {
                             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                Text(timeFmt.format(Date(e.msg.at)), fontSize = 10.sp, fontFamily = FontFamily.Monospace, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                TypeBadge(t)
+                                Text(timeFmt.format(Date(e.msg.at)) + " q${e.msg.qos}", fontSize = 9.5.sp, fontFamily = FontFamily.Monospace, color = t.faint, maxLines = 1)
+                                TypeBadge(tp)
                                 if (e.msg.retained) Text("R", fontSize = 9.sp, color = Amber, fontWeight = FontWeight.Bold)
-                                Text("q${e.msg.qos}", fontSize = 9.sp, fontFamily = FontFamily.Monospace, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                Text(e.msg.topic, fontSize = 11.sp, fontFamily = FontFamily.Monospace, color = typeColor(t),
+                                Text(e.msg.topic, fontSize = 10.5.sp, fontFamily = FontFamily.Monospace, color = typeColor(tp),
                                     maxLines = if (open) 3 else 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-                                TextButton(onClick = { open = !open }, contentPadding = PaddingValues(2.dp)) { Text(if (open) "−" else "+", fontSize = 12.sp) }
+                                Text(if (open) "−" else "+", fontSize = 13.sp, color = t.dim,
+                                    modifier = Modifier.clip(CircleShape).clickable { open = !open }.padding(horizontal = 8.dp, vertical = 2.dp))
                             }
-                            Text(e.msg.payload, fontSize = 12.sp, fontFamily = FontFamily.Monospace, color = MaterialTheme.colorScheme.onSurface,
-                                maxLines = if (open) 20 else 2, overflow = TextOverflow.Ellipsis)
-                            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = .4f))
+                            Text(e.msg.payload, fontSize = 11.5.sp, fontFamily = FontFamily.Monospace, color = t.ink,
+                                lineHeight = 15.sp, maxLines = if (open) 20 else 2, overflow = TextOverflow.Ellipsis)
+                            HorizontalDivider(color = t.tileBorder)
                         }
                     }
                 }
                 if (shown.isEmpty()) Text(if (filter.isBlank() && type == "all") "Ждём сообщения…" else "Ничего не найдено",
-                    color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp, modifier = Modifier.align(Alignment.Center))
+                    color = t.dim, fontSize = 13.sp, modifier = Modifier.align(Alignment.Center))
                 if (!follow) Box(Modifier.align(Alignment.TopCenter).padding(top = 6.dp).clip(CircleShape)
                     .background(MaterialTheme.colorScheme.primary)
                     .clickable { follow = true }.padding(horizontal = 14.dp, vertical = 7.dp)) {
@@ -146,7 +164,7 @@ fun JournalScreen(vm: MainViewModel, nav: Nav) {
                     }
                 }
             }
-            Text("тап — копировать · + — полный payload · R — retained", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("тап — копировать · + — полный payload · R — retained", fontSize = 10.sp, color = t.faint)
         }
     }
 }

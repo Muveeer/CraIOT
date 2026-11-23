@@ -40,15 +40,19 @@ class DeviceRegistry(scope: CoroutineScope, incoming: SharedFlow<RawMessage>) {
                     val (snapshot, unknown, unknownEntries) = synchronized(lock) {
                         val current = LinkedHashMap(map)
                         for ((id, device) in current) {
-                            current[id] = device.copy(
-                                live = device.lastSeen != null && now - device.lastSeen < LIVE_MS,
-                            )
+                            val live = device.lastSeen != null && now - device.lastSeen < LIVE_MS
+                            // Новый экземпляр только при реальном перевороте live; иначе ссылка прежняя → Compose скипает плитки.
+                            if (device.live != live) current[id] = device.copy(live = live)
                         }
                         Triple(current, unknownCount, unknownBuffer.toList())
                     }
-                    _devices.value = snapshot
-                    _unknown.value = unknown
-                    _unknownList.value = unknownEntries
+                    val prev = _devices.value
+                    val changed = snapshot.size != prev.size || snapshot.any { (id, d) -> prev[id] !== d }
+                    if (changed) _devices.value = snapshot
+                    if (_unknown.value != unknown) {
+                        _unknown.value = unknown
+                        _unknownList.value = unknownEntries
+                    }
                 }
             }
         }
