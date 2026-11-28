@@ -1,7 +1,7 @@
 services:
   mosquitto:
     image: eclipse-mosquitto:2
-    container_name: craiot-broker
+    container_name: iotmod-broker
     ports: ["1883:1883", "9001:9001", "8083:8083"]
     volumes:
       - ./mosquitto.conf:/mosquitto/config/mosquitto.conf:ro

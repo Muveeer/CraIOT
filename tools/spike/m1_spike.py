@@ -1,14 +1,14 @@
 # M1.0: проверка облака. Запуск: pip install paho-mqtt && python m1_spike.py
-# Пароль вводится через переменную окружения: CRAIOT_PASS=... python m1_spike.py
-# HELLO по умолчанию выключен; для включения: CRAIOT_HELLO=1
+# Данные авторизации задаются через IOTMOD_USERNAME и IOTMOD_PASS.
+# HELLO по умолчанию выключен; для включения: IOTMOD_HELLO=1
 import os, socket, ssl, time
 import paho.mqtt.client as mqtt
 
 HOST, PORT, PATH, PREFIX = "live-control.com", 18883, "/ws", "/ver407"
-USERNAME = "95:5lZDsy"
-PASSWORD = os.environ.get("CRAIOT_PASS", "")
+USERNAME = os.environ.get("IOTMOD_USERNAME", "")
+PASSWORD = os.environ.get("IOTMOD_PASS", "")
 
-print("=== CraIOT M1.0 spike ===")
+print("=== IoTmod M1.0 spike ===")
 try:  # 1) TLS: публичный ли сертификат
     ctx = ssl.create_default_context()
     with socket.create_connection((HOST, PORT), timeout=10) as sock:
@@ -24,7 +24,7 @@ def on_connect(c, u, flags, rc, properties=None):
     print(f"CONNACK={rc} за {time.time()-t0:.2f}s")
     c.subscribe(f"{PREFIX}/#", qos=1)
     print("SUBSCRIBED", PREFIX + "/#")
-    if os.environ.get("CRAIOT_HELLO") == "1":
+    if os.environ.get("IOTMOD_HELLO") == "1":
         c.publish(PREFIX, "HELLO", qos=0)
         print("HELLO отправлен — захват конфигов включён")
 
@@ -37,13 +37,13 @@ def on_message(c, userdata, msg):
 
 try:  # 2) MQTT over WSS, только подписка; HELLO выключен по умолчанию
     try:
-        c = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id="craiot-spike-01",
+        c = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id="iotmod-spike-01",
                         transport="websockets", protocol=mqtt.MQTTv311)
     except (AttributeError, TypeError):
-        c = mqtt.Client(client_id="craiot-spike-01", transport="websockets", protocol=mqtt.MQTTv311)
+        c = mqtt.Client(client_id="iotmod-spike-01", transport="websockets", protocol=mqtt.MQTTv311)
     c.ws_set_options(path=PATH)
     c.tls_set(cert_reqs=ssl.CERT_REQUIRED)
-    c.username_pw_set(USERNAME, PASSWORD or None)
+    c.username_pw_set(USERNAME or None, PASSWORD or None)
     c.on_connect, c.on_message = on_connect, on_message
     c.connect(HOST, PORT, keepalive=45)
     c.loop_start(); time.sleep(25); c.loop_stop(); c.disconnect()

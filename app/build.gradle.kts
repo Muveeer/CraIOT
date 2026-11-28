@@ -1,5 +1,3 @@
-import java.util.Properties
-
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
@@ -7,23 +5,15 @@ plugins {
     alias(libs.plugins.ksp)
 }
 
-val localProps = Properties().apply {
-    val f = rootProject.file("local.properties")
-    if (f.exists()) f.inputStream().use { load(it) }
-}
-fun String.asJavaString() = "\"" + replace("\\", "\\\\").replace("\"", "\\\"") + "\""
-
 android {
-    namespace = "com.livecontrol.craiot"
+    namespace = "com.livecontrol.iotmod"
     compileSdk = 35
     defaultConfig {
-        applicationId = "com.livecontrol.craiot"
+        applicationId = "com.livecontrol.iotmod"
         minSdk = 26
         targetSdk = 35
         versionCode = 1
         versionName = "0.1.0-spike"
-        buildConfigField("String", "DEFAULT_USERNAME", localProps.getProperty("craiot.username", "").asJavaString())
-        buildConfigField("String", "DEFAULT_PASSWORD", localProps.getProperty("craiot.password", "").asJavaString())
     }
     buildFeatures { compose = true; buildConfig = true }
     compileOptions {

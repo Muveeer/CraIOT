@@ -11,4 +11,4 @@ jobs:
       - run: ./gradlew test --no-daemon
       - run: ./gradlew assembleDebug --no-daemon
       - uses: actions/upload-artifact@v4
-        with: { name: CraIOT-debug-apk, path: app/build/outputs/apk/debug/app-debug.apk }
+        with: { name: IoTmod-debug-apk, path: app/build/outputs/apk/debug/app-debug.apk }

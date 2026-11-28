@@ -1,7 +1,7 @@
 # M1.7: смоук стенда tcp/ws/wss. pip install paho-mqtt; стенд поднят в broker/
 import ssl, sys, time
 import paho.mqtt.client as mqtt
-HOST, USER, PASS, PREFIX = "127.0.0.1", "craiot", "test123", "/ver407"
+HOST, USER, PASS, PREFIX = "127.0.0.1", "iotmod", "test123", "/ver407"
 ok = True
 for name, port, transport, tls in [("tcp", 1883, "tcp", False), ("ws", 9001, "websockets", False), ("wss", 8083, "websockets", True)]:
     got, done = [], {"rc": None}

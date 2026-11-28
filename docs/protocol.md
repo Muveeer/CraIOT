@@ -1,4 +1,4 @@
-# CraIOT protocol v0.9
+# IoTmod protocol v0.9
 
 ## Profile Live → Password
 
