@@ -28,7 +28,7 @@ class FakeTransport : MqttTransport {
     override fun disconnect() { _state.value = ConnState.Disconnected }
     fun loseConnection() { _state.value = ConnState.Error(ErrorKind.NETWORK, "обрыв") }
 }
-
+@OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class ConnectionManagerTest {
     private fun params() = ConnectionParams(Transport.WSS, "h", 18883, "/ws", "/ver407", "u", "p")
 
@@ -36,7 +36,7 @@ class ConnectionManagerTest {
         val t = FakeTransport(); var hooked = false
         val m = ConnectionManager(t, backgroundScope)
         m.onConnected = { hooked = true }
-        m.connect(params()); advanceUntilIdle()
+        m.connect(params()); runCurrent()
         assertEquals(ConnState.Connected, m.state.value)
         assertEquals(listOf("/ver407/#"), t.subscribed)
         assertTrue(hooked)
@@ -46,7 +46,7 @@ class ConnectionManagerTest {
         val t = FakeTransport()
         t.results += Result.failure(MqttException(MqttException.REASON_CODE_NOT_AUTHORIZED.toInt()))
         val m = ConnectionManager(t, backgroundScope)
-        m.connect(params()); advanceUntilIdle()
+        m.connect(params()); runCurrent()
         assertEquals(ErrorKind.AUTH, (m.state.value as ConnState.Error).kind)
         advanceTimeBy(120_000)
         assertEquals(1, t.connectCalls) // никакого шторма
@@ -57,11 +57,11 @@ class ConnectionManagerTest {
         t.results += Result.failure(ConnectException("refused"))
         t.results += Result.failure(ConnectException("refused"))
         val m = ConnectionManager(t, backgroundScope)
-        m.connect(params()); advanceUntilIdle()
+        m.connect(params()); runCurrent()
         assertEquals(1, (m.state.value as ConnState.Reconnecting).attempt)
         advanceTimeBy(1_300)
         assertEquals(2, (m.state.value as ConnState.Reconnecting).attempt)
-        advanceTimeBy(2_600); advanceUntilIdle()
+        advanceTimeBy(2_600); runCurrent()
         assertEquals(ConnState.Connected, m.state.value)
         assertEquals(3, t.connectCalls)
     }
@@ -70,7 +70,7 @@ class ConnectionManagerTest {
         val t = FakeTransport()
         t.results += Result.failure(ConnectException("x"))
         val m = ConnectionManager(t, backgroundScope)
-        m.connect(params()); advanceUntilIdle()
+        m.connect(params()); runCurrent()
         m.disconnect(); advanceTimeBy(120_000)
         assertEquals(1, t.connectCalls)
         assertEquals(ConnState.Disconnected, m.state.value)
@@ -79,10 +79,10 @@ class ConnectionManagerTest {
     @Test fun mid_session_loss_triggers_reconnect() = runTest {
         val t = FakeTransport()
         val m = ConnectionManager(t, backgroundScope)
-        m.connect(params()); advanceUntilIdle()
+        m.connect(params()); runCurrent()
         t.loseConnection(); advanceTimeBy(10)
         assertEquals(1, (m.state.value as ConnState.Reconnecting).attempt)
-        advanceTimeBy(1_300); advanceUntilIdle()
+        advanceTimeBy(1_300); runCurrent()
         assertEquals(ConnState.Connected, m.state.value)
     }
 
@@ -90,8 +90,8 @@ class ConnectionManagerTest {
         val t = FakeTransport()
         t.results += Result.failure(ConnectException("x"))
         val m = ConnectionManager(t, backgroundScope)
-        m.connect(params()); advanceUntilIdle()
-        m.retryNow(); advanceUntilIdle()
+        m.connect(params()); runCurrent()
+        m.retryNow(); runCurrent()
         assertEquals(ConnState.Connected, m.state.value)
         t.loseConnection(); advanceTimeBy(10)
         assertEquals(1, (m.state.value as ConnState.Reconnecting).attempt)
@@ -101,9 +101,9 @@ class ConnectionManagerTest {
         val t = FakeTransport()
         t.results += Result.failure(ConnectException("x"))
         val m = ConnectionManager(t, backgroundScope)
-        m.connect(params()); advanceUntilIdle()
+        m.connect(params()); runCurrent()
         assertTrue(m.state.value is ConnState.Reconnecting)
-        m.onNetworkAvailable(); advanceUntilIdle()
+        m.onNetworkAvailable(); runCurrent()
         assertEquals(ConnState.Connected, m.state.value)
         assertEquals(2, t.connectCalls)
     }
