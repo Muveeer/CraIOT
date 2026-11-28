@@ -16,6 +16,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -36,19 +37,21 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.livecontrol.iotmod.data.ReadingEntity
 import com.livecontrol.iotmod.protocol.ChartPoint
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
-import java.util.Calendar
 import java.util.Date
 import java.util.Locale
+import java.util.TimeZone
 import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.math.floor
 import kotlin.math.log10
 import kotlin.math.pow
 
-val SeriesColors = listOf(Color(0xFF82AAFF), Color(0xFF9ECE6A), Color(0xFFFFCB6B), Color(0xFFF7768E))
+val SeriesColors = listOf(Color(0xFF5D8DEE), Color(0xFF4E9A51), Color(0xFFC08A2E), Color(0xFFE06C75))
 private const val BAR_SLOTS = 48
 private data class Pt(val t: Long, val y: Double)
 private data class Series(val idx: Int, val name: String, val pts: List<Pt>)
@@ -56,20 +59,24 @@ private data class Selection(val label: String, val vals: List<Double?>, val xFr
 
 @Composable
 fun Sparkline(points: List<ChartPoint>, modifier: Modifier = Modifier, color: Color = SeriesColors[0]) {
-    Canvas(modifier) {
-        val ys = points.mapNotNull { it.ys.firstOrNull() }
-        if (ys.size < 2) return@Canvas
-        val mn = ys.min(); val mx = ys.max(); val span = (mx - mn).takeIf { it > 1e-9 } ?: 1.0
-        val path = Path()
-        ys.forEachIndexed { i, y ->
-            val x = size.width * i / (ys.size - 1)
-            val yy = size.height * (1 - ((y - mn) / span).toFloat())
-            if (i == 0) path.moveTo(x, yy) else path.lineTo(x, yy)
+    val ys = remember(points) { points.mapNotNull { it.ys.firstOrNull() } }
+    Spacer(modifier.drawWithCache {
+        if (ys.size < 2) {
+            onDrawBehind { }
+        } else {
+            val mn = ys.min(); val mx = ys.max(); val span = (mx - mn).takeIf { it > 1e-9 } ?: 1.0
+            val path = Path().apply {
+                ys.forEachIndexed { i, y ->
+                    val x = size.width * i / (ys.size - 1)
+                    val yy = size.height * (1 - ((y - mn) / span).toFloat())
+                    if (i == 0) moveTo(x, yy) else lineTo(x, yy)
+                }
+            }
+            val stroke = Stroke(width = 1.5.dp.toPx())
+            onDrawBehind { drawPath(path, color, style = stroke) }
         }
-        drawPath(path, color, style = Stroke(width = 1.5.dp.toPx()))
-    }
+    })
 }
-
 private fun downsample(pts: List<Pt>, buckets: Int, envelope: Boolean): List<Pt> {
     if (pts.size <= buckets) return pts
     val out = ArrayList<Pt>(buckets * 2)
@@ -101,12 +108,12 @@ private fun niceStep(range: Double): Double {
 private fun fmtVal(v: Double): String =
     if (v == v.toLong().toDouble() && abs(v) < 1e9) v.toLong().toString() else String.format(Locale.US, "%.2f", v)
 
-private fun bucketStart(t: Long, bucket: String): Long {
-    val c = Calendar.getInstance()
-    c.timeInMillis = t
-    c.set(Calendar.MINUTE, 0); c.set(Calendar.SECOND, 0); c.set(Calendar.MILLISECOND, 0)
-    if (bucket == "day") c.set(Calendar.HOUR_OF_DAY, 0)
-    return c.timeInMillis
+private fun bucketStart(t: Long, bucket: String, tz: TimeZone): Long {
+    val offset = tz.getOffset(t)
+    val local = t + offset
+    val unit = if (bucket == "day") 86_400_000L else 3_600_000L
+    val startLocal = local - Math.floorMod(local, unit)
+    return startLocal - offset
 }
 
 @Composable
@@ -130,9 +137,9 @@ fun ChartScreen(vm: MainViewModel, topic: String, title: String, onBack: () -> U
     var initialized by remember { mutableStateOf(false) }
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
-    val devices by vm.devices.collectAsStateWithLifecycle()
-    val live = remember(devices, topic) {
-        devices.values.flatMap { it.widgets.values }.firstOrNull { it.topic == topic }?.points ?: emptyList()
+    val devicesRef by vm.devicesRef.collectAsStateWithLifecycle()
+    val live = remember(devicesRef, topic) {
+        devicesRef.value.values.flatMap { it.widgets.values }.firstOrNull { it.topic == topic }?.points ?: emptyList()
     }
     val drawMode = if (bucket == "raw") mode else "bar"
     val aggLabel = when (agg) { "max" -> "максимум"; "min" -> "минимум"; "last" -> "последнее значение"; else -> "среднее" }
@@ -162,7 +169,6 @@ fun ChartScreen(vm: MainViewModel, topic: String, title: String, onBack: () -> U
         }
     }
 
-    // Дневной ряд (точки раз в сутки) → сразу столбики по дням
     LaunchedEffect(series) {
         if (!initialized && series.isNotEmpty()) {
             val pts = series.first().pts
@@ -177,16 +183,26 @@ fun ChartScreen(vm: MainViewModel, topic: String, title: String, onBack: () -> U
     val visible = series.filter { it.idx !in hidden }
     val bucketed = remember(visible, bucket, agg) {
         if (bucket == "raw" || visible.isEmpty()) null else {
-            val keys = visible.flatMap { s -> s.pts.map { bucketStart(it.t, bucket) } }.distinct().sorted()
+            val tz = TimeZone.getDefault()
+            val keysSet = java.util.TreeSet<Long>()
+            val perSeries = visible.map { s ->
+                val m = HashMap<Long, ArrayList<Double>>()
+                for (p in s.pts) {
+                    val k = bucketStart(p.t, bucket, tz)
+                    keysSet.add(k)
+                    m.getOrPut(k) { ArrayList() }.add(p.y)
+                }
+                m
+            }
+            val keys = keysSet.toList()
             val matrix = keys.map { k ->
-                visible.map { s ->
-                    val inB = s.pts.filter { bucketStart(it.t, bucket) == k }
-                    val ys = inB.map { it.y }
+                perSeries.map { m ->
+                    val ys = m[k]
                     when {
-                        ys.isEmpty() -> null
+                        ys == null || ys.isEmpty() -> null
                         agg == "max" -> ys.max()
                         agg == "min" -> ys.min()
-                        agg == "last" -> inB.last().y
+                        agg == "last" -> ys.last()
                         else -> ys.average()
                     }
                 }
@@ -197,7 +213,6 @@ fun ChartScreen(vm: MainViewModel, topic: String, title: String, onBack: () -> U
     val t0 = visible.minOfOrNull { it.pts.first().t } ?: 0L
     val t1 = visible.maxOfOrNull { it.pts.last().t } ?: 0L
     val down = remember(visible, drawMode) { visible.map { it.idx to downsample(it.pts, 160, drawMode != "bar") } }
-    // Столбцы: равномерные временные слоты, среднее в слоте, пустой слот = пауза данных
     val barBuckets = remember(visible, t0, t1) {
         val span = (t1 - t0).coerceAtLeast(1L)
         visible.map { s ->
@@ -234,13 +249,16 @@ fun ChartScreen(vm: MainViewModel, topic: String, title: String, onBack: () -> U
                 }
                 TextButton(onClick = {
                     scope.launch {
-                    val full = vm.readings(topic, 0L)
-                    val sb = StringBuilder("ts;").append(series.joinToString(";") { it.name }).append('\n')
-                    full.forEach { r ->
-                        sb.append(r.ts).append(';')
-                            .append(listOf(r.v1, r.v2, r.v3, r.v4).joinToString(";") { it?.let { v -> fmtVal(v) } ?: "" }).append('\n')
-                    }
-                    ctx.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply { type = "text/plain"; putExtra(Intent.EXTRA_TEXT, sb.toString()) }, "CSV"))
+                        val csv = withContext(Dispatchers.Default) {
+                            val full = vm.readings(topic, 0L).takeLast(5000)
+                            val sb = StringBuilder("ts;").append(series.joinToString(";") { it.name }).append('\n')
+                            full.forEach { r ->
+                                sb.append(r.ts).append(';')
+                                sb.append(listOf(r.v1, r.v2, r.v3, r.v4).joinToString(";") { it?.let { v -> fmtVal(v) } ?: "" }).append('\n')
+                            }
+                            sb.toString()
+                        }
+                        ctx.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply { type = "text/plain"; putExtra(Intent.EXTRA_TEXT, csv) }, "CSV"))
                     }
                 }) { Text("CSV") }
                 TextButton(onClick = onBack) { Text("Назад") }
@@ -270,7 +288,7 @@ fun ChartScreen(vm: MainViewModel, topic: String, title: String, onBack: () -> U
                         Chip("Мин", agg == "min") { agg = "min" }
                         Chip("Последнее", agg == "last") { agg = "last" }
                     }
-                    Text("Точки объединяются за ${if (bucket == "hour") "час" else "день"}: $aggLabel", fontSize = 10.sp, color = cap)
+                    Text("Точки объединяются за ${if (bucket == "hour") "час" else "день"}: $aggLabel", fontSize = 11.sp, color = cap)
                 }
                 ControlRow("Серии") {
                     series.forEach { sr ->
@@ -290,7 +308,7 @@ fun ChartScreen(vm: MainViewModel, topic: String, title: String, onBack: () -> U
 
             if (visible.isEmpty() || visible.all { it.pts.isEmpty() }) {
                 Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         Text(
                             if (total == 0L) "История копится с момента установки M4.\nЧисловые статусы и точки chart пишутся в Room."
                             else "В этом диапазоне нет точек.\nВсего в истории: $total.",

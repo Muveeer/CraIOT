@@ -19,6 +19,15 @@ defaultConfig {
     buildConfigField("String", "DEFAULT_PASSWORD", "\"\"")
 }
     buildFeatures { compose = true; buildConfig = true }
+    buildTypes {
+        release {
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            // для теста ставим debug-подпись, чтобы APK устанавливался без своего ключа
+            signingConfig = signingConfigs.getByName("debug")
+        }
+    }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17

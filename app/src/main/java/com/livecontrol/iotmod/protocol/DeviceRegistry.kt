@@ -255,17 +255,18 @@ class WidgetCommands(
         val previous = widget.value
         return scope.launch {
             registry.optimistic(base, value)
-            val result = transport.publish("$base/control", value, qos = 1)
-            if (result.isFailure) {
-                registry.rollback(base, previous)
-                return@launch
-            }
             val timeout = scope.launch {
                 delay(5_000)
-                synchronized(lock) { pending.remove(base) }
-                registry.rollback(base, previous)
+                val removed = synchronized(lock) { pending.remove(base) }
+                if (removed != null) registry.rollback(base, removed.previous)
             }
             synchronized(lock) { pending.put(base, Pending(previous, timeout))?.job?.cancel() }
+            val result = transport.publish("$base/control", value, qos = 1)
+            if (result.isFailure) {
+                val removed = synchronized(lock) { pending.remove(base) }
+                removed?.job?.cancel()
+                if (removed != null) registry.rollback(base, previous)
+            }
         }
     }
 

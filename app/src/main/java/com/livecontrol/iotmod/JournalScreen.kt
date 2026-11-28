@@ -1,6 +1,9 @@
 package com.livecontrol.iotmod
 
-import android.content.Intent
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -9,24 +12,18 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.KeyboardArrowUp
-import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
-import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -38,11 +35,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-/**
- * Поток v3: каждый Text с явным цветом из токенов (ничего не сливается с фоном на MIUI),
- * строка ленты дешёвая (~6 composable, contentType для переиспользования слотов),
- * счётчики отдельной строкой — не схлопываются weight'ами на 393 dp.
- */
+/** Поток v4: шапка сворачивается как в Обзоре, нижний бар прячется при скролле. */
 @Composable
 fun JournalScreen(vm: MainViewModel, nav: Nav) {
     val t = LocalCraTokens.current
@@ -60,6 +53,10 @@ fun JournalScreen(vm: MainViewModel, nav: Nav) {
     val timeFmt = remember { SimpleDateFormat("HH:mm:ss.SSS", Locale.getDefault()) }
     LaunchedEffect(paused) { vm.journal.setPaused(paused) }
 
+    val chrome = rememberChrome(nav.barsHidden,
+        { listState.firstVisibleItemIndex }, { listState.firstVisibleItemScrollOffset })
+    val headerCollapsed = chrome.headerCollapsed.value
+
     val shown = remember(entries, filter, type) {
         entries.filter { e ->
             (type == "all" || Telemetry.typeOf(e.msg.topic) == type) &&
@@ -70,8 +67,13 @@ fun JournalScreen(vm: MainViewModel, nav: Nav) {
         var wasScrolling = false
         snapshotFlow { Triple(listState.isScrollInProgress, listState.firstVisibleItemIndex, listState.firstVisibleItemScrollOffset) }
             .collect { (scrolling, idx, off) ->
-                if (scrolling) { wasScrolling = true; if (idx > 0 || off > 0) follow = false }
-                else if (wasScrolling) { wasScrolling = false; if (idx == 0 && off == 0) follow = true }
+                if (scrolling) {
+                    wasScrolling = true
+                    if (idx > 0 || off > 0) follow = false
+                } else if (wasScrolling) {
+                    wasScrolling = false
+                    if (idx == 0 && off == 0) follow = true
+                }
             }
     }
     LaunchedEffect(shown, follow) { if (follow && shown.isNotEmpty() && !listState.isScrollInProgress) listState.scrollToItem(0) }
@@ -82,63 +84,66 @@ fun JournalScreen(vm: MainViewModel, nav: Nav) {
     fun export() {
         val sb = StringBuilder()
         shown.take(800).asReversed().forEach { e ->
-            sb.append(timeFmt.format(Date(e.msg.at))).append(if (e.msg.retained) " R " else "   ").append(e.msg.topic).append('\n').append(e.msg.payload).append("\n\n")
+            sb.append(timeFmt.format(Date(e.msg.at))).append(if (e.msg.retained) " R " else "   ").append(e.msg.topic)
+                .append('\n').append(e.msg.payload).append("\n\n")
         }
-        context.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply { type = "text/plain"; putExtra(Intent.EXTRA_TEXT, sb.toString()) }, "Экспорт потока"))
+        context.startActivity(android.content.Intent.createChooser(
+            android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+                type = "text/plain"
+                putExtra(android.content.Intent.EXTRA_TEXT, sb.toString())
+            }, "Экспорт потока"))
     }
 
+    val searchVisible = !headerCollapsed || filter.isNotBlank()
     Surface(Modifier.fillMaxSize()) {
-        Column(Modifier.fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Column(Modifier.fillMaxSize().padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Spacer(Modifier.height(4.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("Поток", style = MaterialTheme.typography.titleMedium, color = t.ink, modifier = Modifier.weight(1f))
-                Text("${fmtRate(tel.rate)} msg/s", fontSize = 12.sp, fontFamily = FontFamily.Monospace, color = Cyan)
-                Spacer(Modifier.width(8.dp))
-                RateSpark(tel.spark, Modifier.width(90.dp).height(16.dp))
-            }
-            StatusBanner(state, null, onConnect = { vm.activeId.value?.let { vm.connect(it) } }, onDisconnect = vm::disconnect, onRetry = vm::retry)
-            Row(
-                Modifier.fillMaxWidth().height(40.dp).clip(RoundedCornerShape(12.dp))
-                    .background(t.tile).padding(horizontal = 10.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Icon(Icons.Default.Search, null, tint = t.faint, modifier = Modifier.size(15.dp))
-                Spacer(Modifier.width(8.dp))
-                Box(Modifier.weight(1f)) {
-                    if (filter.isEmpty()) Text("Фильтр: топик или payload…", fontSize = 12.5.sp, color = t.faint, maxLines = 1)
-                    BasicTextField(filter, { filter = it }, singleLine = true,
-                        textStyle = TextStyle(fontSize = 13.sp, color = t.ink),
-                        cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-                        modifier = Modifier.fillMaxWidth())
+                Column(Modifier.weight(1f)) {
+                    Text("Поток", style = MaterialTheme.typography.titleMedium, maxLines = 1)
+                    Text(if (headerCollapsed) "${shown.size}/${entries.size} · ${fmtRate(tel.rate)} msg/s" else "",
+                        style = CraType.rowSub, color = t.faint, maxLines = 1)
                 }
-                if (filter.isNotEmpty()) {
-                    Spacer(Modifier.width(6.dp))
-                    Icon(Icons.Default.Close, null, tint = t.faint,
-                        modifier = Modifier.size(16.dp).clip(CircleShape).clickable { filter = "" })
-                }
-            }
-            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                ConsoleChip("все", type == "all", tel.total) { type = "all" }
-                listOf("status", "config", "event", "control", "state", "other").forEach { tp ->
-                    ConsoleChip(tp, type == tp, tel.byType[tp]) { type = tp }
-                }
-            }
-            Text("${shown.size} / ${entries.size}" + (if (paused) " · ПАУЗА" else ""), fontSize = 11.sp,
-                fontFamily = FontFamily.Monospace, color = if (paused) Amber else t.faint, maxLines = 1)
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                ConsoleChip("авто", follow) { follow = !follow }
-                Spacer(Modifier.weight(1f))
+                Text("${fmtRate(tel.rate)} msg/s", style = CraType.meta, color = Cyan)
+                Spacer(Modifier.width(6.dp))
                 TextButton(onClick = { paused = !paused }, contentPadding = PaddingValues(6.dp)) { Text(if (paused) "Пуск" else "Пауза", fontSize = 12.sp) }
                 TextButton(onClick = { export() }, contentPadding = PaddingValues(6.dp)) { Text("Экспорт", fontSize = 12.sp) }
                 TextButton(onClick = { vm.journal.clear() }, contentPadding = PaddingValues(6.dp)) { Text("Очистить", fontSize = 12.sp) }
             }
-            Box(Modifier.weight(1f).clip(RoundedCornerShape(14.dp)).background(t.tile)) {
-                LazyColumn(state = listState, modifier = Modifier.fillMaxSize().padding(horizontal = 8.dp, vertical = 4.dp)) {
+            AnimatedVisibility(visible = searchVisible, enter = expandVertically(tween(160)), exit = shrinkVertically(tween(160))) {
+                CraSearchField(filter, { filter = it }, "Фильтр: топик или payload…")
+            }
+            AnimatedVisibility(visible = !headerCollapsed, enter = expandVertically(tween(160)), exit = shrinkVertically(tween(160))) {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    StatusBanner(state, null,
+                        onConnect = { vm.activeId.value?.let { vm.connect(it) } },
+                        onDisconnect = vm::disconnect, onRetry = vm::retry)
+                    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        ConsoleChip("все", type == "all", tel.total) { type = "all" }
+                        listOf("status", "config", "event", "control", "state", "other").forEach { tp ->
+                            ConsoleChip(tp, type == tp, tel.byType[tp]) { type = tp }
+                        }
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        ConsoleChip("авто", follow) { follow = !follow }
+                        Spacer(Modifier.weight(1f))
+                        Text("${shown.size} / ${entries.size}" + (if (paused) " · ПАУЗА" else ""), style = CraType.meta,
+                            color = if (paused) Amber else t.faint, maxLines = 1)
+                    }
+                    Text("тап — копировать · + — полный payload · R — retained", style = CraType.meta, color = t.faint)
+                }
+            }
+            Box(Modifier.weight(1f).clip(androidx.compose.foundation.shape.RoundedCornerShape(14.dp)).background(t.tile)) {
+                LazyColumn(state = listState, modifier = Modifier.fillMaxSize().padding(horizontal = 8.dp, vertical = 4.dp).nestedScroll(chrome.connection)) {
                     items(shown, key = { it.seq }, contentType = { "row" }) { e ->
                         var open by remember(e.seq) { mutableStateOf(false) }
                         val tp = Telemetry.typeOf(e.msg.topic)
-                        Column(Modifier.fillMaxWidth().clickable { clipboard.setText(AnnotatedString("${e.msg.topic}\n${e.msg.payload}")) }.padding(vertical = 4.dp)) {
+                        Column(Modifier.fillMaxWidth().clickable {
+                            clipboard.setText(AnnotatedString("${e.msg.topic}\n${e.msg.payload}"))
+                        }.padding(vertical = 4.dp)) {
                             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                Text(timeFmt.format(Date(e.msg.at)) + " q${e.msg.qos}", fontSize = 9.5.sp, fontFamily = FontFamily.Monospace, color = t.faint, maxLines = 1)
+                                Text(timeFmt.format(Date(e.msg.at)) + " q${e.msg.qos}", fontSize = 9.5.sp,
+                                    fontFamily = FontFamily.Monospace, color = t.faint, maxLines = 1)
                                 TypeBadge(tp)
                                 if (e.msg.retained) Text("R", fontSize = 9.sp, color = Amber, fontWeight = FontWeight.Bold)
                                 Text(e.msg.topic, fontSize = 10.5.sp, fontFamily = FontFamily.Monospace, color = typeColor(tp),
@@ -158,20 +163,22 @@ fun JournalScreen(vm: MainViewModel, nav: Nav) {
                     .background(MaterialTheme.colorScheme.primary)
                     .clickable { follow = true }.padding(horizontal = 14.dp, vertical = 7.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.KeyboardArrowUp, null, tint = MaterialTheme.colorScheme.onPrimary, modifier = Modifier.size(16.dp))
-                        Spacer(Modifier.width(4.dp))
-                        Text(if (newCount > 0) "$newCount новых" else "К ленте", color = MaterialTheme.colorScheme.onPrimary, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                        Icon(androidx.compose.material.icons.Icons.Default.KeyboardArrowUp, null,
+                            tint = MaterialTheme.colorScheme.onPrimary, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text(if (newCount > 0) "$newCount новых" else "К ленте", color = MaterialTheme.colorScheme.onPrimary,
+                            fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
                     }
                 }
             }
-            Text("тап — копировать · + — полный payload · R — retained", fontSize = 10.sp, color = t.faint)
         }
     }
 }
 
 @Composable
 fun StatusBanner(state: ConnState, name: String?, onConnect: () -> Unit, onDisconnect: () -> Unit, onRetry: () -> Unit) {
-    val text: String; val color: Color
+    val text: String
+    val color: androidx.compose.ui.graphics.Color
     when (state) {
         is ConnState.Connected -> { text = "Подключено" + (name?.let { " · $it" } ?: ""); color = OnlineGreen }
         is ConnState.Connecting -> { text = "Подключение…"; color = MaterialTheme.colorScheme.onSurfaceVariant }
@@ -179,7 +186,7 @@ fun StatusBanner(state: ConnState, name: String?, onConnect: () -> Unit, onDisco
         is ConnState.Error -> { text = state.message; color = MaterialTheme.colorScheme.error }
         else -> { text = "Отключено"; color = MaterialTheme.colorScheme.onSurfaceVariant }
     }
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
         Text(text, color = color, fontSize = 13.sp, modifier = Modifier.weight(1f))
         when (state) {
             is ConnState.Connected, is ConnState.Connecting, is ConnState.Reconnecting -> Button(onClick = onDisconnect) { Text("Отключить") }

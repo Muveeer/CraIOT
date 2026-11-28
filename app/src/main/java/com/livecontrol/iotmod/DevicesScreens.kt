@@ -1,17 +1,25 @@
 package com.livecontrol.iotmod
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -30,7 +38,11 @@ private val SYS_RE = Regex("^(ip|up|cr|rssi|heap|fv|bn|bt|bver|wver|upt|time).*"
 
 @Composable
 private fun OnlineBadge(up: Boolean, known: Boolean) {
-    val (text, color) = when { up -> "online" to OnlineGreen; known -> "offline" to OfflineRed; else -> "—" to MaterialTheme.colorScheme.onSurfaceVariant }
+    val (text, color) = when {
+        up -> "online" to OnlineGreen
+        known -> "offline" to OfflineRed
+        else -> "—" to MaterialTheme.colorScheme.onSurfaceVariant
+    }
     Surface(shape = RoundedCornerShape(6.dp), color = color.copy(alpha = .12f)) {
         Text(text, color = color, fontSize = 11.sp, modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp))
     }
@@ -38,6 +50,7 @@ private fun OnlineBadge(up: Boolean, known: Boolean) {
 
 @Composable
 fun DevicesScreen(vm: MainViewModel, nav: Nav, onOpen: (String) -> Unit, onBack: () -> Unit) {
+    val t = LocalCraTokens.current
     val devices by vm.devices.collectAsStateWithLifecycle()
     val unknown by vm.unknown.collectAsStateWithLifecycle()
     val unknownList by vm.unknownList.collectAsStateWithLifecycle()
@@ -46,24 +59,37 @@ fun DevicesScreen(vm: MainViewModel, nav: Nav, onOpen: (String) -> Unit, onBack:
     val state by vm.connState.collectAsStateWithLifecycle()
     var showUnknown by nav.devShowUnknown
     val list = remember(devices) { devices.values.sortedBy { it.id } }
+    val chrome = rememberChrome(nav.barsHidden,
+        { nav.devList.firstVisibleItemIndex }, { nav.devList.firstVisibleItemScrollOffset })
+    val headerCollapsed = chrome.headerCollapsed.value
+
     Surface(Modifier.fillMaxSize()) {
-        Column(Modifier.fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Column(Modifier.fillMaxSize().padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Spacer(Modifier.height(4.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("Устройства · ${list.size}", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
-                TextButton(onClick = onBack) { Text("Назад") }
+                Column(Modifier.weight(1f)) {
+                    Text("Устройства · ${list.size}", style = MaterialTheme.typography.titleMedium, maxLines = 1)
+                    Text(if (headerCollapsed) "online ${list.count { isUp(it) }}/${list.size}" else "",
+                        style = CraType.meta, color = t.faint, maxLines = 1)
+                }
+                TextButton(onClick = { vm.hello() }, enabled = state is com.livecontrol.iotmod.mqtt.ConnState.Connected,
+                    contentPadding = PaddingValues(6.dp)) { Text("HELLO", fontSize = 12.sp) }
             }
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("online ${list.count { isUp(it) }} · offline ${list.count { !isUp(it) && it.online == false }} · ? ${list.count { it.online == null && !it.live }} · нераспознано $unknown",
-                    fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
-                TextButton(onClick = { vm.hello() }, enabled = state is com.livecontrol.iotmod.mqtt.ConnState.Connected) { Text("HELLO") }
+            AnimatedVisibility(visible = !headerCollapsed, enter = expandVertically(tween(160)), exit = shrinkVertically(tween(160))) {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("online ${list.count { isUp(it) }} · offline ${list.count { !isUp(it) && it.online == false }} · ? ${list.count { it.online == null && !it.live }} · нераспознано $unknown",
+                        style = CraType.rowSub, color = t.dim)
+                    if (unknown > 0) TextButton(onClick = { showUnknown = !showUnknown }, contentPadding = PaddingValues(6.dp)) {
+                        Text(if (showUnknown) "Скрыть нераспознанные" else "Показать нераспознанные", fontSize = 12.sp)
+                    }
+                }
             }
-            if (unknown > 0) TextButton(onClick = { showUnknown = !showUnknown }) { Text(if (showUnknown) "Скрыть нераспознанные" else "Показать нераспознанные") }
-            LazyColumn(state = nav.devList, modifier = Modifier.weight(1f)) {
+            LazyColumn(state = nav.devList, modifier = Modifier.weight(1f).nestedScroll(chrome.connection)) {
                 if (showUnknown) items(unknownList, key = { "u:${it.at}:${it.topic}" }) { u ->
                     Column(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
-                        Text(u.topic, fontFamily = FontFamily.Monospace, fontSize = 11.sp, color = Signal)
-                        Text(u.reason, fontSize = 10.sp, color = MaterialTheme.colorScheme.error)
-                        Text(u.payload, fontFamily = FontFamily.Monospace, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 3, overflow = TextOverflow.Ellipsis)
+                        Text(u.topic, style = CraType.meta, color = Signal)
+                        Text(u.reason, style = CraType.meta, color = MaterialTheme.colorScheme.error)
+                        Text(u.payload, style = CraType.meta, color = t.dim, maxLines = 3, overflow = TextOverflow.Ellipsis)
                         HorizontalDivider(Modifier.padding(top = 4.dp))
                     }
                 }
@@ -74,13 +100,14 @@ fun DevicesScreen(vm: MainViewModel, nav: Nav, onOpen: (String) -> Unit, onBack:
                         HealthDot(isUp(d))
                         Spacer(Modifier.width(8.dp))
                         Column(Modifier.weight(1f)) {
-                            Text(aliases[d.id] ?: d.id, fontFamily = FontFamily.Monospace, fontSize = 13.sp, maxLines = 1)
-                            Text("${d.widgets.size} виджетов · ${fmtRate(tel.perDevice[d.id] ?: 0.0)}/s · ${ts(d.lastSeen)}" + (ip?.let { " · $it" } ?: "") + (up?.let { " · $it" } ?: ""),
-                                fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text(aliases[d.id] ?: d.id, style = CraType.rowTitle.copy(fontFamily = FontFamily.Monospace), color = t.ink, maxLines = 1)
+                            Text("${d.widgets.size} виджетов · ${fmtRate(tel.perDevice[d.id] ?: 0.0)}/s · ${ts(d.lastSeen)}" +
+                                (ip?.let { " · $it" } ?: "") + (up?.let { " · $it" } ?: ""),
+                                style = CraType.meta, color = t.dim, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
                         OnlineBadge(isUp(d), d.online != null)
                     }
-                    HorizontalDivider()
+                    HorizontalDivider(color = t.tileBorder)
                 }
             }
         }
@@ -88,7 +115,8 @@ fun DevicesScreen(vm: MainViewModel, nav: Nav, onOpen: (String) -> Unit, onBack:
 }
 
 @Composable
-fun DeviceScreen(vm: MainViewModel, id: String, onBack: () -> Unit) {
+fun DeviceScreen(vm: MainViewModel, nav: Nav, id: String, onBack: () -> Unit) {
+    val t = LocalCraTokens.current
     val devices by vm.devices.collectAsStateWithLifecycle()
     val aliases by vm.aliases.collectAsStateWithLifecycle()
     val tel by vm.telemetry.collectAsStateWithLifecycle()
@@ -98,37 +126,71 @@ fun DeviceScreen(vm: MainViewModel, id: String, onBack: () -> Unit) {
     val d: Device? = devices[id]
     var tab by rememberSaveable { mutableStateOf("widgets") }
     var alias by rememberSaveable(id) { mutableStateOf(aliases[id] ?: "") }
+    var expandedPages by rememberSaveable(id) { mutableStateOf(listOf<String>()) }
+    val listState = rememberLazyListState()
+    val chrome = rememberChrome(nav.barsHidden,
+        { listState.firstVisibleItemIndex }, { listState.firstVisibleItemScrollOffset })
+    val headerCollapsed = chrome.headerCollapsed.value
+
     Surface(Modifier.fillMaxSize()) {
-        Column(Modifier.fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Column(Modifier.fillMaxSize().padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Spacer(Modifier.height(4.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
-                    Text(aliases[id] ?: id, fontFamily = FontFamily.Monospace, fontSize = 14.sp, maxLines = 1)
-                    if (aliases[id] != null) Text(id, fontFamily = FontFamily.Monospace, fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(aliases[id] ?: id, style = CraType.groupTitle.copy(fontFamily = FontFamily.Monospace), color = t.ink, maxLines = 1)
+                    if (aliases[id] != null) Text(id, style = CraType.meta, color = t.faint)
                 }
                 if (d != null) OnlineBadge(isUp(d), d.online != null)
                 Spacer(Modifier.width(8.dp))
-                TextButton(onClick = onBack) { Text("Назад") }
+                TextButton(onClick = onBack, contentPadding = PaddingValues(6.dp)) { Text("Назад", fontSize = 12.sp) }
             }
-            if (d == null) { Text("Устройство не найдено", color = MaterialTheme.colorScheme.onSurfaceVariant); return@Column }
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                ConsoleChip("Виджеты", tab == "widgets", d.widgets.size.toLong()) { tab = "widgets" }
-                ConsoleChip("Паспорт", tab == "passport") { tab = "passport" }
+            if (d == null) {
+                Text("Устройство не найдено", color = t.dim)
+                return@Column
+            }
+            AnimatedVisibility(visible = !headerCollapsed, enter = expandVertically(tween(160)), exit = shrinkVertically(tween(160))) {
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    ConsoleChip("Виджеты", tab == "widgets", d.widgets.size.toLong()) { tab = "widgets" }
+                    ConsoleChip("Паспорт", tab == "passport") { tab = "passport" }
+                }
             }
             if (tab == "widgets") {
                 val groups = remember(d.widgets) {
                     d.widgets.values.sortedWith(consoleWidgetOrder).groupBy { it.page.ifBlank { "Без страницы" } }
                 }
-                LazyColumn(modifier = Modifier.weight(1f)) {
+                val pinnedWidgets = remember(d.widgets, pins) { d.widgets.values.filter { it.topic in pins }.sortedWith(consoleWidgetOrder) }
+                LazyColumn(state = listState, modifier = Modifier.weight(1f).nestedScroll(chrome.connection)) {
+                    if (pinnedWidgets.isNotEmpty()) {
+                        item(key = "h:pins") {
+                            Row(Modifier.padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Icon(androidx.compose.material.icons.Icons.Default.Star, null,
+                                    tint = MaterialTheme.colorScheme.tertiary, modifier = Modifier.size(14.dp))
+                                Text("Закреплённое", style = CraType.groupTitle, color = MaterialTheme.colorScheme.tertiary)
+                                Text("${pinnedWidgets.size}", style = CraType.meta, color = t.faint)
+                            }
+                        }
+                        items(pinnedWidgets, key = { "p:${it.id}" }) { w ->
+                            WidgetConsoleRow(w, vm, compact, true) { vm.togglePin(w.topic) }
+                        }
+                    }
                     groups.forEach { (page, ws) ->
-                        item(key = "h:$page") { Text(page, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(top = 8.dp, bottom = 4.dp)) }
-                        items(ws, key = { it.id }) { w -> WidgetConsoleRow(w, vm, compact, w.topic in pins) { vm.togglePin(w.topic) } }
+                        val isOpen = expandedPages.contains(page)
+                        item(key = "h:$page") {
+                            CollapseHeader(page, ws.size, isOpen,
+                                { expandedPages = if (isOpen) expandedPages - page else expandedPages + page })
+                        }
+                        if (isOpen) items(ws, key = { it.id }) { w ->
+                            WidgetConsoleRow(w, vm, compact, w.topic in pins) { vm.togglePin(w.topic) }
+                        }
                     }
                 }
             } else {
-                LazyColumn(modifier = Modifier.weight(1f)) {
+                LazyColumn(state = listState, modifier = Modifier.weight(1f).nestedScroll(chrome.connection)) {
                     item {
                         val now by vm.now.collectAsStateWithLifecycle()
-                        OutlinedTextField(alias, { alias = it }, Modifier.fillMaxWidth(), singleLine = true, label = { Text("Имя устройства (алиас)") })
+                        OutlinedTextField(alias, { alias = it }, Modifier.fillMaxWidth(), singleLine = true,
+                            label = { Text("Имя устройства (алиас)") })
                         TextButton(onClick = { vm.setAlias(id, alias) }) { Text("Сохранить имя") }
                         KV("device id", d.id)
                         KV("state", if (d.online == true) "online" else if (d.online == false) "offline" else "—")
@@ -138,22 +200,26 @@ fun DeviceScreen(vm: MainViewModel, id: String, onBack: () -> Unit) {
                         KV("widgets", "${d.widgets.size} · скрыто ${d.widgets.values.count { it.hidden }}")
                         KV("announced", if (d.announced) "да" else "нет")
                         Spacer(Modifier.height(8.dp))
-                        Text("Системные виджеты", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
+                        Text("Системные виджеты", style = CraType.groupTitle, color = MaterialTheme.colorScheme.primary)
                     }
-                    val sys = d.widgets.values.filter { SYS_RE.matches(it.topic.substringAfterLast('/')) || (it.kind == WidgetKind.UNKNOWN && it.value != null && it.value!!.toDoubleOrNull() == null) }
+                    val sys = d.widgets.values.filter {
+                        SYS_RE.matches(it.topic.substringAfterLast('/')) ||
+                            (it.kind == WidgetKind.UNKNOWN && it.value != null && it.value!!.toDoubleOrNull() == null)
+                    }
                     items(sys, key = { "s:${it.id}" }) { w ->
                         KV(w.topic.substringAfterLast('/'), "${w.value ?: "—"}${w.after ?: ""}")
                     }
                     item {
                         Spacer(Modifier.height(8.dp))
-                        Text("Нераспознанные по устройству", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
+                        Text("Нераспознанные по устройству", style = CraType.groupTitle, color = MaterialTheme.colorScheme.primary)
                     }
                     val un = unknownList.filter { it.topic.contains("/$id/") }
-                    if (un.isEmpty()) item { Text("нет", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                    if (un.isEmpty()) item { Text("нет", style = CraType.rowSub, color = t.dim) }
                     items(un, key = { "u:${it.at}:${it.topic}" }) { u ->
                         Column(Modifier.padding(vertical = 3.dp)) {
-                            Text(u.topic, fontFamily = FontFamily.Monospace, fontSize = 11.sp, color = Signal)
-                            Text(u.reason + " · " + u.payload, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 3, overflow = TextOverflow.Ellipsis)
+                            Text(u.topic, style = CraType.meta, color = Signal)
+                            Text(u.reason + " · " + u.payload, style = CraType.meta, color = t.dim,
+                                maxLines = 3, overflow = TextOverflow.Ellipsis)
                         }
                     }
                 }

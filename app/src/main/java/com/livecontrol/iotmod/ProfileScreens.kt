@@ -2,11 +2,16 @@ package com.livecontrol.iotmod
 
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -15,6 +20,7 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.KeyboardType
@@ -32,7 +38,8 @@ import kotlinx.coroutines.launch
 import java.util.UUID
 
 @Composable
-fun ProfilesScreen(vm: MainViewModel, onPick: (String) -> Unit, onEdit: (String?) -> Unit, onBack: () -> Unit) {
+fun ProfilesScreen(vm: MainViewModel, nav: Nav, onPick: (String) -> Unit, onEdit: (String?) -> Unit, onBack: () -> Unit) {
+    val t = LocalCraTokens.current
     val profiles by vm.profiles.collectAsStateWithLifecycle()
     val activeId by vm.activeId.collectAsStateWithLifecycle()
     val state by vm.connState.collectAsStateWithLifecycle()
@@ -49,6 +56,14 @@ fun ProfilesScreen(vm: MainViewModel, onPick: (String) -> Unit, onEdit: (String?
     val scope = rememberCoroutineScope()
     val ctx = LocalContext.current
     var note by remember { mutableStateOf<String?>(null) }
+    var diagOpen by rememberSaveable { mutableStateOf(false) }
+    var styleOpen by rememberSaveable { mutableStateOf(false) }
+    var aboutOpen by rememberSaveable { mutableStateOf(false) }
+    val listState = rememberLazyListState()
+    val chrome = rememberChrome(nav.barsHidden,
+        { listState.firstVisibleItemIndex }, { listState.firstVisibleItemScrollOffset })
+    val headerCollapsed = chrome.headerCollapsed.value
+
     val exportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
         if (uri != null) scope.launch {
             val json = vm.exportProfiles()
@@ -63,50 +78,65 @@ fun ProfilesScreen(vm: MainViewModel, onPick: (String) -> Unit, onEdit: (String?
         }
     }
 
-    Scaffold(floatingActionButton = { FloatingActionButton(onClick = { onEdit(null) },
-        containerColor = MaterialTheme.colorScheme.primary, contentColor = MaterialTheme.colorScheme.onPrimary) { Text("+", fontSize = 24.sp) } }) { pad ->
-        Column(Modifier.fillMaxSize().padding(pad).padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    Scaffold(floatingActionButton = {
+        FloatingActionButton(onClick = { onEdit(null) },
+            containerColor = MaterialTheme.colorScheme.primary, contentColor = MaterialTheme.colorScheme.onPrimary) { Text("+", fontSize = 24.sp) }
+    }) { pad ->
+        Column(Modifier.fillMaxSize().padding(pad).padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Spacer(Modifier.height(4.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
-                    Text("Связь", style = MaterialTheme.typography.titleMedium)
-                    Text("подключения, диагностика, оформление", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("Связь", style = MaterialTheme.typography.titleMedium, maxLines = 1)
+                    Text(if (headerCollapsed) (active?.name ?: "нет профиля") else "подключения, диагностика, оформление",
+                        style = CraType.rowSub, color = t.faint, maxLines = 1)
                 }
-                TextButton(onClick = onBack) { Text("Назад") }
             }
-            StatusBanner(state, active?.name,
-                onConnect = { activeId?.let { vm.connect(it) } },
-                onDisconnect = vm::disconnect, onRetry = vm::retry)
-            LazyColumn(Modifier.weight(1f)) {
+            AnimatedVisibility(visible = !headerCollapsed, enter = expandVertically(tween(160)), exit = shrinkVertically(tween(160))) {
+                StatusBanner(state, active?.name,
+                    onConnect = { activeId?.let { vm.connect(it) } },
+                    onDisconnect = vm::disconnect, onRetry = vm::retry)
+            }
+            LazyColumn(state = listState, modifier = Modifier.weight(1f).nestedScroll(chrome.connection)) {
                 item(key = "diag") {
-                    SectionHeader("Диагностика", "сводка парка · живые counters сессии и потока")
-                    Row(Modifier.horizontalScroll(rememberScrollState()).padding(bottom = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        StatTile("устройства", "${devices.values.count { it.live || it.online == true }}/${devices.size}", "online", OnlineGreen, Modifier.width(104.dp))
-                        StatTile("виджеты", "${devices.values.sumOf { d -> d.widgets.values.count { !it.hidden } }}", "видимых", Signal, Modifier.width(96.dp))
-                        StatTile("поток", fmtRate(tel.rate), "msg/s", Cyan, Modifier.width(96.dp))
-                        StatTile("история", "$hist", "точек", Violet, Modifier.width(104.dp))
-                    }
-                    KV("брокер", active?.let { "${it.host}:${it.port}" } ?: "—")
-                    KV("транспорт", active?.let { "${it.protocol.name.lowercase()}${it.path}" } ?: "—")
-                    KV("префикс", active?.prefix ?: "—")
-                    KV("сессия", if (tel.sessionStart > 0) fmtDur(now - tel.sessionStart) else "—")
-                    KV("переподключений", "${tel.reconnects}")
-                    KV("поток", "${fmtRate(tel.rate)} msg/s · всего ${tel.total}")
-                    KV("последний пакет", if (tel.lastMsgAt > 0) fmtAge(now - tel.lastMsgAt) + " назад" else "—")
-                    KV("устройства", "${devices.values.count { it.live || it.online == true }} online / ${devices.size}")
-                    KV("нераспознано", "$unknown")
-                    KV("история", "$hist точек · Room 7 дней")
-                    Row(Modifier.horizontalScroll(rememberScrollState()).padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        ConsoleChip("HELLO", false) { vm.hello() }
-                        ConsoleChip("Переподключить", false) { vm.retry() }
+                    CollapseHeader("Диагностика", null, diagOpen, { diagOpen = !diagOpen })
+                    if (diagOpen) {
+                        Column {
+                            Row(Modifier.horizontalScroll(rememberScrollState()).padding(bottom = 6.dp),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                StatTile("устройства", "${devices.values.count { it.live || it.online == true }}/${devices.size}",
+                                    "online", OnlineGreen, Modifier.width(104.dp))
+                                StatTile("виджеты", "${devices.values.sumOf { d -> d.widgets.values.count { !it.hidden } }}",
+                                    "видимых", Signal, Modifier.width(96.dp))
+                                StatTile("поток", fmtRate(tel.rate), "msg/s", Cyan, Modifier.width(96.dp))
+                                StatTile("история", "$hist", "точек", Violet, Modifier.width(104.dp))
+                            }
+                            KV("брокер", active?.let { "${it.host}:${it.port}" } ?: "—")
+                            KV("транспорт", active?.let { "${it.protocol.name.lowercase()}${it.path}" } ?: "—")
+                            KV("префикс", active?.prefix ?: "—")
+                            KV("сессия", if (tel.sessionStart > 0) fmtDur(now - tel.sessionStart) else "—")
+                            KV("переподключений", "${tel.reconnects}")
+                            KV("поток", "${fmtRate(tel.rate)} msg/s · всего ${tel.total}")
+                            KV("последний пакет", if (tel.lastMsgAt > 0) fmtAge(now - tel.lastMsgAt) + " назад" else "—")
+                            KV("устройства", "${devices.values.count { it.live || it.online == true }} online / ${devices.size}")
+                            KV("нераспознано", "$unknown")
+                            KV("история", "$hist точек · Room 7 дней")
+                            Row(Modifier.horizontalScroll(rememberScrollState()).padding(top = 6.dp),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                ConsoleChip("HELLO", false) { vm.hello() }
+                                ConsoleChip("Переподключить", false) { vm.retry() }
+                            }
+                        }
                     }
                 }
                 item(key = "settings") {
-                    SectionHeader("Оформление", "графит / бумага · раскладка плиток — чип «вид» на Обзоре")
-                    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        ConsoleChip(if (dark) "Тёмная" else "Светлая", dark) { vm.toggleDark() }
-                        ConsoleChip("Compact", compact) { vm.toggleCompact() }
-                        ConsoleChip("Свечение", glow) { vm.toggleGlow() }
-                        ConsoleChip("Сброс вида", false) { vm.resetView() }
+                    CollapseHeader("Оформление", null, styleOpen, { styleOpen = !styleOpen })
+                    if (styleOpen) {
+                        Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            ConsoleChip(if (dark) "Тёмная" else "Светлая", dark) { vm.toggleDark() }
+                            ConsoleChip("Compact", compact) { vm.toggleCompact() }
+                            ConsoleChip("Свечение", glow) { vm.toggleGlow() }
+                            ConsoleChip("Сброс вида", false) { vm.resetView() }
+                        }
                     }
                 }
                 item(key = "profiles-head") {
@@ -115,27 +145,32 @@ fun ProfilesScreen(vm: MainViewModel, onPick: (String) -> Unit, onEdit: (String?
                         ConsoleChip("Экспорт", false) { exportLauncher.launch("iotmod-profiles.json") }
                         ConsoleChip("Импорт", false) { importLauncher.launch(arrayOf("application/json", "text/plain")) }
                     }
-                    note?.let { Text(it, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 4.dp)) }
+                    note?.let { Text(it, style = CraType.meta, color = t.dim, modifier = Modifier.padding(top = 4.dp)) }
                 }
                 items(profiles, key = { it.id }) { p ->
-                    Row(Modifier.fillMaxWidth().clickable { onPick(p.id) }.padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Row(Modifier.fillMaxWidth().clickable { onPick(p.id) }.padding(vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically) {
                         HealthDot(p.id == activeId && state is ConnState.Connected)
                         Spacer(Modifier.width(8.dp))
                         Column(Modifier.weight(1f)) {
                             Text(p.name + if (p.id == activeId) " · активный" else "",
-                                color = if (p.id == activeId) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface)
+                                style = CraType.groupTitle, color = if (p.id == activeId) MaterialTheme.colorScheme.primary else t.ink)
                             Text("${p.protocol.name.lowercase()}://${p.host}:${p.port}${p.path} · ${p.prefix}",
-                                fontSize = 11.sp, fontFamily = FontFamily.Monospace, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                style = CraType.rowSub, color = t.dim)
                         }
                         TextButton(onClick = { onEdit(p.id) }) { Text("Изм.") }
                     }
-                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = .5f))
+                    HorizontalDivider(color = t.tileBorder)
                 }
                 item(key = "about") {
-                    SectionHeader("О приложении")
-                    KV("приложение", "IoTmod ${BuildConfig.VERSION_NAME}")
-                    KV("пакет", BuildConfig.APPLICATION_ID)
-                    KV("протокол", "IoT Manager ver4 · MQTT 3.1.1")
+                    CollapseHeader("О приложении", null, aboutOpen, { aboutOpen = !aboutOpen })
+                    if (aboutOpen) {
+                        Column {
+                            KV("приложение", "IoTmod ${BuildConfig.VERSION_NAME}")
+                            KV("пакет", BuildConfig.APPLICATION_ID)
+                            KV("протокол", "IoT Manager ver4 · MQTT 3.1.1")
+                        }
+                    }
                     Spacer(Modifier.height(16.dp))
                 }
             }
@@ -162,21 +197,29 @@ fun EditScreen(vm: MainViewModel, id: String?, onDone: () -> Unit) {
             if (id != null) {
                 val (p, creds) = vm.load(id)
                 p?.let {
-                    name = it.name; protocol = it.protocol.name.lowercase()
-                    host = it.host; port = it.port.toString(); path = it.path; prefix = it.prefix
+                    name = it.name
+                    protocol = it.protocol.name.lowercase()
+                    host = it.host
+                    port = it.port.toString()
+                    path = it.path
+                    prefix = it.prefix
                 }
-                username = creds.first; password = creds.second
+                username = creds.first
+                password = creds.second
             }
             loaded = true
         }
     }
 
     Surface(Modifier.fillMaxSize()) {
-        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(if (id == null) "Новый профиль" else "Профиль", style = MaterialTheme.typography.titleMedium)
             OutlinedTextField(name, { name = it }, Modifier.fillMaxWidth(), label = { Text("Название") }, singleLine = true)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                listOf("tcp", "ws", "wss").forEach { p -> FilterChip(selected = protocol == p, onClick = { protocol = p }, label = { Text(p) }) }
+                listOf("tcp", "ws", "wss").forEach { p ->
+                    FilterChip(selected = protocol == p, onClick = { protocol = p }, label = { Text(p) })
+                }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(host, { host = it }, Modifier.weight(2f), label = { Text("Host") }, singleLine = true)
@@ -202,7 +245,9 @@ fun EditScreen(vm: MainViewModel, id: String?, onDone: () -> Unit) {
                     onDone()
                 }) { Text("Сохранить") }
                 TextButton(onClick = onDone) { Text("Отмена") }
-                if (id != null) TextButton(onClick = { vm.delete(id); onDone() }) { Text("Удалить", color = MaterialTheme.colorScheme.error) }
+                if (id != null) TextButton(onClick = { vm.delete(id); onDone() }) {
+                    Text("Удалить", color = MaterialTheme.colorScheme.error)
+                }
             }
         }
     }

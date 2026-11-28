@@ -13,6 +13,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.sample
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -20,11 +21,9 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.util.UUID
 
-/**
- * UI-граница потока: реестр/команды/journal работают на полной скорости брокера,
- * но экраны получают батчи (sample): devices ≤5 fps, telemetry 2 fps, журнал 4 fps.
- * Это убирает шторм recomposition (19 msg/s × 416 виджетов), не трогая логику.
- */
+/** Обёртка с равенством по ссылке: без глубокого equals по дереву устройств на каждый тик. */
+class IdentityRef<T>(val value: T)
+
 class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val c = (app as IoTmodApp).container
     val profiles = c.repo.profiles.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
@@ -33,10 +32,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     val journal = c.journal
     val journalFeed = c.journal.items.sample(250).flowOn(Dispatchers.Default).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), c.journal.items.value)
     val devices = c.registry.devices.sample(200).flowOn(Dispatchers.Default).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), c.registry.devices.value)
+    val devicesRef = c.registry.devices.sample(200).flowOn(Dispatchers.Default).map { IdentityRef(it) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), IdentityRef(c.registry.devices.value))
     val unknown = c.registry.unknown
     val unknownList = c.registry.unknownList
     val telemetry = c.telemetry.snap.sample(500).flowOn(Dispatchers.Default).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), c.telemetry.snap.value)
     val now = c.now
+    val themeId = c.ui.themeId.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "night")
     val dark = c.ui.dark.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), true)
     val compact = c.ui.compact.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
     val pins = c.ui.pins.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptySet())
@@ -49,6 +51,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     val tileGlow = c.ui.glow.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), true)
     val tileAge = c.ui.showAge.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), true)
     val tileSpark = c.ui.showSpark.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), true)
+    val tileMorph = c.ui.morph.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), true)
     val tileOverrides = c.ui.overrides.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyMap())
 
     fun connect(id: String) { viewModelScope.launch { c.connectProfile(id) } }
@@ -56,7 +59,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun retry() = c.manager.retryNow()
     fun hello() { viewModelScope.launch { c.hello() } }
     fun send(w: Widget, value: String) = c.commands.send(w, value)
-    fun toggleDark() { viewModelScope.launch { c.ui.set(!dark.value) } }
+    fun setTheme(id: String) { viewModelScope.launch { c.ui.setTheme(id) } }
+    fun toggleDark() { viewModelScope.launch { c.ui.setTheme(if (dark.value) "paper" else "night") } }
     fun toggleCompact() { viewModelScope.launch { c.ui.setCompact(!compact.value) } }
     fun togglePin(topic: String) { viewModelScope.launch { c.ui.togglePin(topic) } }
     fun setAlias(id: String, name: String) { viewModelScope.launch { c.ui.setAlias(id, name) } }
@@ -68,12 +72,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun toggleGlow() { viewModelScope.launch { c.ui.setGlow(!tileGlow.value) } }
     fun toggleAge() { viewModelScope.launch { c.ui.setShowAge(!tileAge.value) } }
     fun toggleSpark() { viewModelScope.launch { c.ui.setShowSpark(!tileSpark.value) } }
+    fun toggleMorph() { viewModelScope.launch { c.ui.setMorph(!tileMorph.value) } }
     fun setSizeOverride(topic: String, size: String?) { viewModelScope.launch { c.ui.setSizeOverride(topic, size) } }
     fun resetView() { viewModelScope.launch { c.ui.resetView() } }
 
     suspend fun readings(topic: String, from: Long): List<ReadingEntity> =
         runCatching { c.db.history().range(topic, from) }.getOrDefault(emptyList())
-    /** Последние [limit] точек диапазона (DESC LIMIT в SQL) — график не тянет сотни тысяч строк. */
     suspend fun readingsLast(topic: String, from: Long, limit: Int): List<ReadingEntity> =
         runCatching { c.db.history().rangeLast(topic, from, limit).asReversed() }.getOrDefault(emptyList())
     suspend fun historyCount(): Long = runCatching { c.db.history().count() }.getOrDefault(0L)

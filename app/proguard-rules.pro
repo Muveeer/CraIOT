@@ -1,0 +1,3 @@
+-keep class org.eclipse.paho.** { *; }
+-dontwarn org.eclipse.paho.**
+-keep class com.livecontrol.iotmod.data.** { *; }
