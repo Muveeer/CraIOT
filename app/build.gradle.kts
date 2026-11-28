@@ -8,13 +8,16 @@ plugins {
 android {
     namespace = "com.livecontrol.iotmod"
     compileSdk = 35
-    defaultConfig {
-        applicationId = "com.livecontrol.iotmod"
-        minSdk = 26
-        targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0-spike"
-    }
+defaultConfig {
+    applicationId = "com.livecontrol.iotmod"
+    minSdk = 26
+    targetSdk = 35
+    versionCode = 1
+    versionName = "0.1.0-spike"
+
+    buildConfigField("String", "DEFAULT_USERNAME", "\"\"")
+    buildConfigField("String", "DEFAULT_PASSWORD", "\"\"")
+}
     buildFeatures { compose = true; buildConfig = true }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17

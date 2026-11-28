@@ -1,5 +1,5 @@
 package com.livecontrol.craiot
-
+import com.livecontrol.iotmod.BuildConfig
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable

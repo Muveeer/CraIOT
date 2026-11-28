@@ -1,5 +1,5 @@
 package com.livecontrol.craiot
-
+import com.livecontrol.iotmod.BuildConfig
 import android.app.Application
 import android.content.Context
 import androidx.lifecycle.DefaultLifecycleObserver
@@ -96,8 +96,10 @@ class AppContainer(context: Context) {
                 repo.setActive(live.id)
             }
         }
-        if (userStopped) return
-        val id = repo.activeId.first() ?: return
-        connectProfile(id)
+if (userStopped) return
+val id = repo.activeId.first() ?: return
+val (username, password) = repo.credentials(id)
+if (username.isBlank() || password.isBlank()) return
+connectProfile(id)
     }
 }
